@@ -1070,6 +1070,9 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      jose:
+        specifier: 6.2.3
+        version: 6.2.3
       openclaw:
         specifier: workspace:*
         version: link:../..

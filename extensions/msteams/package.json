@@ -15,6 +15,7 @@
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
+    "jose": "6.2.3",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
