@@ -7,6 +7,10 @@ import {
   type PluginRuntime,
 } from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
+import {
+  resolveMSTeamsSdkCloudOptions,
+  validateMSTeamsProactiveServiceUrlBoundary,
+} from "./cloud.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import type {
   MSTeamsConversationStore,
@@ -179,7 +183,14 @@ export async function resolveMSTeamsSendContext(params: {
   const core = getMSTeamsRuntime();
   const log = core.logging.getChildLogger({ name: "msteams:send" });
 
-  const { app } = await loadMSTeamsSdkWithAuth(creds);
+  const sdkCloudOptions = resolveMSTeamsSdkCloudOptions(msteamsCfg);
+  const { app } = await loadMSTeamsSdkWithAuth(creds, sdkCloudOptions);
+  validateMSTeamsProactiveServiceUrlBoundary({
+    cloud: sdkCloudOptions.cloud,
+    conversationId,
+    storedServiceUrl: ref.serviceUrl,
+    configuredServiceUrl: sdkCloudOptions.serviceUrl ?? process.env.SERVICE_URL,
+  });
 
   // Create token provider adapter for Graph API / OneDrive operations
   const tokenProvider: MSTeamsAccessTokenProvider = createMSTeamsTokenProvider(app);

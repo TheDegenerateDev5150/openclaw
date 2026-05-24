@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import type { MSTeamsCloudName } from "./cloud.js";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 import { buildOpenClawUserAgentFragment } from "./user-agent.js";
 
@@ -30,6 +31,7 @@ type MSTeamsExpressAdapterCtor = new (
 type TeamsSdkModules = {
   App: typeof import("@microsoft/teams.apps").App;
   ExpressAdapter: MSTeamsExpressAdapterCtor;
+  cloudFromName: (name: string) => unknown;
 };
 
 /**
@@ -164,6 +166,7 @@ export type MSTeamsApp = {
     getBotToken(): Promise<unknown>;
   };
   api: {
+    serviceUrl?: string;
     conversations: {
       activities(conversationId: string): {
         update(activityId: string, activity: unknown): Promise<unknown>;
@@ -209,13 +212,18 @@ async function loadAzureIdentity(): Promise<AzureIdentityModule> {
 let sdkAppPromise: Promise<TeamsSdkModules> | null = null;
 
 async function loadSdkModules(): Promise<TeamsSdkModules> {
-  sdkAppPromise ??= import("@microsoft/teams.apps").then((m) => ({
-    App: m.App,
+  sdkAppPromise ??= Promise.all([
+    import("@microsoft/teams.apps"),
+    import("@microsoft/teams.api"),
+  ]).then(([apps, api]) => ({
+    App: apps.App,
     // ExpressAdapter is in the runtime barrel but its type is hidden behind
     // the SDK's chained `export *` (see MSTeamsHttpServerAdapter comment).
     // Cast to the structural constructor we model locally so the seam stays
     // typed without depending on the SDK's namespace shape.
-    ExpressAdapter: (m as unknown as { ExpressAdapter: MSTeamsExpressAdapterCtor }).ExpressAdapter,
+    ExpressAdapter: (apps as unknown as { ExpressAdapter: MSTeamsExpressAdapterCtor })
+      .ExpressAdapter,
+    cloudFromName: (api as unknown as { cloudFromName: (name: string) => unknown }).cloudFromName,
   }));
   return sdkAppPromise;
 }
@@ -257,6 +265,12 @@ export type CreateMSTeamsAppOptions = {
    * @default 'graph'
    */
   oauthDefaultConnectionName?: string;
+  /** Teams SDK cloud environment. Defaults to Public. */
+  cloud?: MSTeamsCloudName;
+  /** Bot Connector service URL for SDK app-level proactive operations. */
+  serviceUrl?: string;
+  /** Injectable SDK HTTP client. Used by focused tests; production uses SDK defaults. */
+  httpClient?: unknown;
 };
 
 /**
@@ -272,15 +286,21 @@ export async function createMSTeamsApp(
   creds: MSTeamsCredentials,
   options?: CreateMSTeamsAppOptions,
 ): Promise<MSTeamsApp> {
-  const { App } = await loadSdkModules();
+  const { App, cloudFromName } = await loadSdkModules();
   // Tag outbound SDK HTTP calls with a User-Agent fragment so the Teams
   // backend can identify OpenClaw traffic for usage telemetry. Teams SDK
   // 2.0.11+ preserves both its own `teams.ts[apps]/<sdk-version>` identifier
   // and caller-provided User-Agent fragments when plain client headers are used.
+  const cloud = options?.cloud ?? "Public";
+  const serviceUrl = options?.serviceUrl?.trim();
   const appOptions: Record<string, unknown> = {
-    client: { headers: { "User-Agent": buildOpenClawUserAgentFragment() } },
+    client: options?.httpClient ?? {
+      headers: { "User-Agent": buildOpenClawUserAgentFragment() },
+    },
     ...(options?.httpServerAdapter ? { httpServerAdapter: options.httpServerAdapter } : {}),
     ...(options?.messagingEndpoint ? { messagingEndpoint: options.messagingEndpoint } : {}),
+    cloud: cloudFromName(cloud),
+    ...(serviceUrl ? { serviceUrl } : {}),
     ...(options?.oauthDefaultConnectionName
       ? { oauth: { defaultConnectionName: options.oauthDefaultConnectionName } }
       : {}),
@@ -384,7 +404,11 @@ export function createMSTeamsTokenProvider(app: MSTeamsApp): MSTeamsTokenProvide
   };
   return {
     async getAccessToken(scope: string): Promise<string> {
-      if (scope.includes("graph.microsoft.com")) {
+      if (
+        scope.includes("graph.microsoft.com") ||
+        scope.includes("graph.microsoft.us") ||
+        scope.includes("microsoftgraph.chinacloudapi.cn")
+      ) {
         return tokenToString(await app.tokenManager.getGraphToken());
       }
       return tokenToString(await app.tokenManager.getBotToken());

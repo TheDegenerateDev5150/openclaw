@@ -157,6 +157,60 @@ describe("createMSTeamsApp", () => {
     });
     expect(app).toBeDefined();
   });
+
+  it("passes configured cloud and serviceUrl to the SDK App", async () => {
+    const creds: MSTeamsCredentials = {
+      type: "secret",
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
+    };
+
+    const app = await createMSTeamsApp(creds, {
+      cloud: "USGov",
+      serviceUrl: "https://gov.example.us/teams/",
+    });
+
+    const internals = app as unknown as {
+      api?: { serviceUrl?: string };
+      cloud?: { botScope?: string; graphScope?: string };
+    };
+    expect(internals.api?.serviceUrl).toBe("https://gov.example.us/teams");
+    expect(internals.cloud?.botScope).toBe("https://api.botframework.us/.default");
+    expect(internals.cloud?.graphScope).toBe("https://graph.microsoft.us/.default");
+  });
+
+  it("uses the configured cloud serviceUrl for proactive HTTP posts", async () => {
+    const creds: MSTeamsCredentials = {
+      type: "secret",
+      appId: "test-app-id",
+      appPassword: "test-secret",
+      tenantId: "test-tenant",
+    };
+    const post = vi.fn(async () => ({ data: { id: "sent-1" } }));
+    const httpClient = {
+      request: vi.fn(),
+      post,
+      clone: vi.fn(() => httpClient),
+    };
+
+    const app = await createMSTeamsApp(creds, {
+      cloud: "USGov",
+      serviceUrl: "https://smba.infra.gov.teams.microsoft.us/teams",
+      httpClient,
+    });
+
+    await app.send("19:conversation@thread.tacv2", { type: "message", text: "hello" });
+
+    expect(post).toHaveBeenCalledWith(
+      "https://smba.infra.gov.teams.microsoft.us/teams/v3/conversations/19:conversation@thread.tacv2/activities",
+      expect.objectContaining({
+        type: "message",
+        text: "hello",
+        conversation: { id: "19:conversation@thread.tacv2" },
+      }),
+    );
+  });
 });
 
 describe("createMSTeamsTokenProvider", () => {

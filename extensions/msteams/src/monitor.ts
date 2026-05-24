@@ -8,6 +8,7 @@ import {
   type OpenClawConfig,
   type RuntimeEnv,
 } from "../runtime-api.js";
+import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
@@ -291,6 +292,7 @@ export async function monitorMSTeamsProvider(
   // registers POST /api/messages (or configured path) and handles JWT
   // validation + body parsing internally.
   const { app } = await loadMSTeamsSdkWithAuth(creds, {
+    ...resolveMSTeamsSdkCloudOptions(msteamsCfg),
     httpServerAdapter: await createMSTeamsExpressAdapter(expressApp),
     messagingEndpoint: configuredPath,
     ...(msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName

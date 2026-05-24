@@ -27,6 +27,10 @@ vi.mock("@microsoft/teams.apps", () => ({
 
 vi.mock("@microsoft/teams.api", () => ({
   Client: function Client() {},
+  cloudFromName: () => ({
+    botScope: "https://api.botframework.com/.default",
+    graphScope: "https://graph.microsoft.com/.default",
+  }),
 }));
 
 import { probeMSTeams } from "./probe.js";
