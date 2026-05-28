@@ -225,7 +225,10 @@ describe("bonjour-discovery", () => {
     });
 
     expect(beacons).toHaveLength(1);
-    const beacon = beacons[0] as BeaconRecord;
+    const beacon = beacons[0];
+    if (!beacon) {
+      throw new Error("Expected malformed beacon");
+    }
     expect(beacon.host).toBe("broken.local");
     expect(beacon.port).toBeUndefined();
     expect(beacon.gatewayPort).toBeUndefined();

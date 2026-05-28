@@ -264,26 +264,9 @@ export async function monitorMSTeamsProvider(
   // so the App registers its route handler on it (including JWT validation).
   const expressApp = express.default();
 
-  // Cap inbound webhook bodies before any handler parses them. The SDK's
-  // ExpressAdapter installs `express.json()` (no limit) inside its registered
-  // route, so an unbounded payload from a Bearer-shaped attacker would force
-  // JSON parsing before JWT validation. Installing our own
-  // `express.json({ limit })` first makes Express memoize the parsed body on
-  // the request — the SDK's later `json()` is then a no-op, and our limit
-  // applies before either the bearer gate or the SDK's authorize step run.
-  expressApp.use(express.json({ limit: DEFAULT_WEBHOOK_MAX_BODY_BYTES }));
-  expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
-    if (err && typeof err === "object" && "status" in err && err.status === 413) {
-      res.status(413).json({ error: "Payload too large" });
-      return;
-    }
-    next(err);
-  });
-
-  // Cheap auth-presence gate: reject requests without a Bearer token after the
-  // bounded JSON parser above, but before SDK route dispatch and full JWT
-  // validation. This blocks no-auth floods while the body limit protects
-  // bearer-shaped junk requests from unbounded pre-auth parsing.
+  // Cheap auth-presence gate: reject requests without a Bearer token before
+  // JSON parsing. Bearer-shaped junk still hits the bounded parser below before
+  // the SDK's route-level parser and full JWT validation.
   expressApp.use((req: Request, res: Response, next: (err?: unknown) => void) => {
     const auth = req.headers.authorization;
     if (!auth || !auth.startsWith("Bearer ")) {
@@ -291,6 +274,14 @@ export async function monitorMSTeamsProvider(
       return;
     }
     next();
+  });
+  expressApp.use(express.json({ limit: DEFAULT_WEBHOOK_MAX_BODY_BYTES }));
+  expressApp.use((err: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
+    if (err && typeof err === "object" && "status" in err && err.status === 413) {
+      res.status(413).json({ error: "Payload too large" });
+      return;
+    }
+    next(err);
   });
 
   const configuredPath = (msteamsCfg.webhook?.path ?? "/api/messages") as `/${string}`;

@@ -184,12 +184,31 @@ function mergeReferenceIntoActivity(
     activity && typeof activity === "object" && !Array.isArray(activity)
       ? (activity as Record<string, unknown>)
       : { type: "message", text: String(activity ?? "") };
+  const existingChannelData =
+    source.channelData &&
+    typeof source.channelData === "object" &&
+    !Array.isArray(source.channelData)
+      ? (source.channelData as Record<string, unknown>)
+      : undefined;
+  const existingTenant =
+    existingChannelData?.tenant &&
+    typeof existingChannelData.tenant === "object" &&
+    !Array.isArray(existingChannelData.tenant)
+      ? (existingChannelData.tenant as Record<string, unknown>)
+      : undefined;
+  const channelData = ref.tenantId
+    ? {
+        ...(existingChannelData ?? {}),
+        tenant: { ...(existingTenant ?? {}), id: ref.tenantId },
+      }
+    : existingChannelData;
   return {
     ...source,
     channelId: ref.channelId,
     from: ref.bot,
     recipient: ref.user,
     conversation: ref.conversation,
+    ...(channelData ? { channelData } : {}),
     locale: ref.locale,
     ...(ref.tenantId ? { tenantId: ref.tenantId } : {}),
     ...(ref.aadObjectId ? { aadObjectId: ref.aadObjectId } : {}),

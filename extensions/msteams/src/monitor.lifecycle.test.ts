@@ -41,13 +41,16 @@ type RegisterMSTeamsHandlersMock = (
   deps: MSTeamsMessageHandlerDeps,
 ) => MSTeamsActivityHandler;
 
+type MockExpressFn = ReturnType<typeof vi.fn>;
+type MockExpressApp = MockExpressFn & {
+  use: MockExpressFn;
+  post: MockExpressFn;
+  listen: MockExpressFn;
+};
+
 const expressControl = vi.hoisted(() => ({
   mode: { value: "listening" as "listening" | "error" },
-  apps: [] as Array<{
-    use: ReturnType<typeof vi.fn>;
-    post: ReturnType<typeof vi.fn>;
-    listen: ReturnType<typeof vi.fn>;
-  }>,
+  apps: [] as MockExpressApp[],
 }));
 
 const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
@@ -86,7 +89,7 @@ vi.mock("express", () => {
   });
 
   const factory = () => {
-    const app = vi.fn();
+    const app = vi.fn() as MockExpressApp;
     app.use = vi.fn();
     app.post = vi.fn();
     app.listen = vi.fn((_port: number) => {
@@ -336,13 +339,13 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     const app = expressControl.apps.at(-1);
     expect(app).toBeDefined();
     // Three middlewares are installed before the SDK route registers:
-    // [0] = `express.json({ limit })` — caps inbound bodies before any handler
-    //       parses them (forces the SDK's later json() to be a no-op).
-    // [1] = JSON parser error handler — keeps 413 responses JSON-shaped.
-    // [2] = bearer-presence gate — rejects unauthenticated requests cheaply.
+    // [0] = bearer-presence gate — rejects unauthenticated requests cheaply.
+    // [1] = `express.json({ limit })` — caps bearer-shaped inbound bodies
+    //       before the SDK's later json() can parse them.
+    // [2] = JSON parser error handler — keeps 413 responses JSON-shaped.
     expect(app!.use.mock.calls.length).toBeGreaterThanOrEqual(3);
 
-    const bearerMiddleware = app!.use.mock.calls[2]?.[0] as (
+    const bearerMiddleware = app!.use.mock.calls[0]?.[0] as (
       req: Request,
       res: Response,
       next: (err?: unknown) => void,
@@ -383,7 +386,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
 
     const app = expressControl.apps.at(-1);
-    const jsonErrorMiddleware = app!.use.mock.calls[1]?.[0] as (
+    const jsonErrorMiddleware = app!.use.mock.calls[2]?.[0] as (
       err: unknown,
       req: Request,
       res: Response,
@@ -425,9 +428,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     expect(loadMSTeamsSdkWithAuth.mock.calls[0]?.[1]).toMatchObject({
       messagingEndpoint: "/teams/events",
     });
-    const legacyForwarder = app!.post.mock.calls.find(
-      (call: [string, unknown]) => call[0] === "/api/messages",
-    )?.[1];
+    const legacyForwarder = app!.post.mock.calls.find((call) => call[0] === "/api/messages")?.[1];
     expect(typeof legacyForwarder).toBe("function");
     if (typeof legacyForwarder !== "function") {
       throw new Error("expected legacy /api/messages forwarder");

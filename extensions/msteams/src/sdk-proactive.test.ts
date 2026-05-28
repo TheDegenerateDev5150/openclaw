@@ -4,7 +4,9 @@ import type { MSTeamsApp } from "./sdk.js";
 
 const clientState = vi.hoisted(() => ({
   created: [] as Array<{ serviceUrl: string; http: unknown }>,
-  create: vi.fn(async () => ({ id: "activity-1" })),
+  create: vi.fn(async (_payload: { conversationId: string; activity: unknown }) => ({
+    id: "activity-1",
+  })),
 }));
 
 vi.mock("@microsoft/teams.api", () => ({
@@ -82,6 +84,7 @@ describe("sendMSTeamsActivityWithReference", () => {
           conversationType: "personal",
           tenantId: "tenant-1",
         },
+        channelData: { tenant: { id: "tenant-1" } },
       }),
     });
   });
