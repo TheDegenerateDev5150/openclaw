@@ -17,16 +17,19 @@ export type RunFailoverDecision =
       action: "return_error_payload";
     };
 
+/** Decision subset used after retry exhaustion, where only fallback or payload return is valid. */
 export type RetryLimitFailoverDecision = Extract<
   RunFailoverDecision,
   { action: "fallback_model" | "return_error_payload" }
 >;
 
+/** Decision subset for failures before assistant streaming starts. */
 export type PromptFailoverDecision = Extract<
   RunFailoverDecision,
   { action: "rotate_profile" | "fallback_model" | "surface_error" }
 >;
 
+/** Decision subset for failures observed while consuming the assistant stream. */
 export type AssistantFailoverDecision = Extract<
   RunFailoverDecision,
   { action: "continue_normal" | "rotate_profile" | "fallback_model" | "surface_error" }
@@ -71,6 +74,7 @@ export type RunFailoverDecisionParams =
   | PromptDecisionParams
   | AssistantDecisionParams;
 
+/** Retry-limit exhaustion escalates only concrete, replay-safe provider failure reasons. */
 function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
   return Boolean(
     reason &&
@@ -81,6 +85,7 @@ function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
   );
 }
 
+/** Format failures are terminal unless this stage explicitly allows one format retry. */
 function isTerminalFormatFailure(params: {
   allowFormatRetry?: boolean;
   failoverFailure: boolean;
@@ -91,6 +96,7 @@ function isTerminalFormatFailure(params: {
   );
 }
 
+/** Prompt-stage rotation is reserved for concrete non-timeout failover failures. */
 function shouldRotatePrompt(params: PromptDecisionParams): boolean {
   return (
     params.failoverFailure &&
@@ -99,6 +105,7 @@ function shouldRotatePrompt(params: PromptDecisionParams): boolean {
   );
 }
 
+/** Assistant timeout recovery excludes compaction/tool-execution timeouts owned elsewhere. */
 function isAssistantTimeoutFailure(params: AssistantDecisionParams): boolean {
   return (
     params.idleTimedOut ||
@@ -106,6 +113,7 @@ function isAssistantTimeoutFailure(params: AssistantDecisionParams): boolean {
   );
 }
 
+/** Concrete assistant failures can override harness-owned timeout self-recovery. */
 function isConcreteNonTimeoutAssistantFailure(params: AssistantDecisionParams): boolean {
   return (
     params.failoverFailure && Boolean(params.failoverReason) && params.failoverReason !== "timeout"
