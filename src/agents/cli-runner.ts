@@ -202,7 +202,9 @@ async function runCliAgentEndHook(
   runAgentEndSideEffects(hookParams);
 }
 
-async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): Promise<void> {
+async function persistApprovedCliUserTurnTranscript(
+  params: RunCliAgentParamsWithSessionFile,
+): Promise<void> {
   if (params.suppressNextUserMessagePersistence === true || !params.userTurnTranscriptRecorder) {
     return;
   }
