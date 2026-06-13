@@ -69,7 +69,8 @@ function renderGroup(group: ShortcutGroup) {
                 ${s.keys.map((k, i) =>
                   i === 0
                     ? renderKey(k)
-                    : html`<span class="shortcut-legend__plus" aria-hidden="true">+</span>${renderKey(k)}`,
+                    : html`<span class="shortcut-legend__plus" aria-hidden="true">+</span
+                        >${renderKey(k)}`,
                 )}
               </dt>
               <dd class="shortcut-legend__desc">${s.description}</dd>
@@ -82,7 +83,9 @@ function renderGroup(group: ShortcutGroup) {
 }
 
 function trapFocus(e: KeyboardEvent, el: HTMLElement) {
-  if (e.key !== "Tab") return;
+  if (e.key !== "Tab") {
+    return;
+  }
   const focusable = [...el.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter(
     (node) => node.isConnected && node.tabIndex >= 0,
   );
@@ -115,7 +118,9 @@ export type ShortcutLegendProps = {
 };
 
 export function renderShortcutLegend(props: ShortcutLegendProps) {
-  if (!props.open) return nothing;
+  if (!props.open) {
+    return nothing;
+  }
 
   const handleKeydown = (e: KeyboardEvent) => {
     if (e.key === "Escape") {
@@ -153,7 +158,8 @@ export function renderShortcutLegend(props: ShortcutLegendProps) {
           <h2 class="shortcut-legend__title">Keyboard Shortcuts</h2>
           <button
             class="btn btn--icon shortcut-legend__close"
-            type="button" autofocus
+            type="button"
+            autofocus
             aria-label="Close keyboard shortcuts"
             @click=${() => props.onClose()}
           >
