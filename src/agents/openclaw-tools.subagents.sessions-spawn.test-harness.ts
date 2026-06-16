@@ -206,9 +206,26 @@ export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
       status: "fork",
       maxTokens: 100_000,
     }),
-    forkSessionFromParent: async () => ({
-      sessionId: "forked-session-id",
-      sessionFile: "/tmp/forked-session.jsonl",
+    forkSessionEntryFromParent: async () => ({
+      status: "forked",
+      fork: {
+        sessionId: "forked-session-id",
+        sessionFile: "/tmp/forked-session.jsonl",
+      },
+      parentEntry: {
+        sessionId: "parent-session-id",
+        updatedAt: Date.now(),
+      },
+      sessionEntry: {
+        sessionId: "forked-session-id",
+        sessionFile: "/tmp/forked-session.jsonl",
+        forkedFromParent: true,
+        updatedAt: Date.now(),
+      },
+      decision: {
+        status: "fork",
+        maxTokens: 100_000,
+      },
     }),
     updateSessionStore: async (_storePath, mutator) => mutator({}),
   });

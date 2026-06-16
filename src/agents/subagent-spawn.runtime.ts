@@ -5,6 +5,7 @@ export {
 export { getRuntimeConfig } from "../config/config.js";
 export { loadSessionStore, mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
 export {
+  forkSessionEntryFromParent,
   forkSessionFromParent,
   resolveParentForkDecision,
   type ParentForkDecision,

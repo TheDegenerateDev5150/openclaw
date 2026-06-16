@@ -125,6 +125,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
   loadSessionStoreMock?: MockFn;
   ensureContextEnginesInitializedMock?: MockFn;
   updateSessionStoreMock?: MockFn;
+  forkSessionEntryFromParentMock?: MockFn;
   forkSessionFromParentMock?: MockFn;
   resolveContextEngineMock?: MockFn;
   resolveParentForkDecisionMock?: MockFn;
@@ -197,6 +198,27 @@ export async function loadSubagentSpawnModuleForTest(params: {
   vi.doMock("./subagent-spawn.runtime.js", () => ({
     callGateway: (opts: unknown) => params.callGatewayMock(opts),
     buildSubagentSystemPrompt: () => "system-prompt",
+    forkSessionEntryFromParent:
+      params.forkSessionEntryFromParentMock ??
+      (async () => {
+        const fork = (params.forkSessionFromParentMock
+          ? await params.forkSessionFromParentMock()
+          : { sessionId: "forked-session-id", sessionFile: "/tmp/forked-session.jsonl" }) as
+          | { sessionId: string; sessionFile: string }
+          | null;
+        if (!fork) {
+          return { status: "failed" };
+        }
+        return {
+          status: "forked",
+          fork,
+          sessionEntry: {
+            sessionId: fork.sessionId,
+            sessionFile: fork.sessionFile,
+            forkedFromParent: true,
+          },
+        };
+      }),
     forkSessionFromParent:
       params.forkSessionFromParentMock ??
       (async () => ({ sessionId: "forked-session-id", sessionFile: "/tmp/forked-session.jsonl" })),

@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
-import {
-  forkSessionFromParent,
-  resolveParentForkDecision,
-} from "../auto-reply/reply/session-fork.js";
+import { forkSessionEntryFromParent } from "../auto-reply/reply/session-fork.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -30,14 +27,12 @@ export {
 
 type RealtimeVoiceAgentConsultDeps = {
   randomUUID: typeof randomUUID;
-  resolveParentForkDecision: typeof resolveParentForkDecision;
-  forkSessionFromParent: typeof forkSessionFromParent;
+  forkSessionEntryFromParent: typeof forkSessionEntryFromParent;
 };
 
 const defaultRealtimeVoiceAgentConsultDeps: RealtimeVoiceAgentConsultDeps = {
   randomUUID,
-  resolveParentForkDecision,
-  forkSessionFromParent,
+  forkSessionEntryFromParent,
 };
 
 let realtimeVoiceAgentConsultDeps = defaultRealtimeVoiceAgentConsultDeps;
@@ -133,7 +128,34 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
     (!requesterAgentId || requesterAgentId === params.agentId);
   let forkDecisionWarning: string | undefined;
 
-  const patched = await params.agentRuntime.session.patchSessionEntry({
+  let patched: SessionEntry | null = null;
+  if (shouldFork) {
+    const forked = await realtimeVoiceAgentConsultDeps.forkSessionEntryFromParent({
+      parentSessionKey: requesterSessionKey,
+      agentId: params.agentId,
+      config: params.cfg,
+      sessionKey: params.sessionKey,
+      fallbackEntry: {
+        sessionId: "",
+        updatedAt: now,
+      },
+      skipForkWhen: (entry) => Boolean(entry.sessionId?.trim()),
+      skipPatch: () => ({ ...deliveryFields, updatedAt: now }),
+      patch: () => ({
+        ...deliveryFields,
+        spawnedBy: requesterSessionKey,
+        updatedAt: now,
+      }),
+    });
+    if (forked.status === "forked" || forked.status === "skipped") {
+      patched = forked.sessionEntry;
+      if (forked.status === "skipped" && forked.decision?.status === "skip") {
+        forkDecisionWarning = forked.decision.message;
+      }
+    }
+  }
+
+  patched ??= await params.agentRuntime.session.patchSessionEntry({
     agentId: params.agentId,
     config: params.cfg,
     sessionKey: params.sessionKey,
@@ -144,41 +166,6 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
     update: async (entry) => {
       if (entry.sessionId?.trim()) {
         return { ...deliveryFields, updatedAt: now };
-      }
-      if (shouldFork) {
-        const parentEntry = params.agentRuntime.session.getSessionEntry({
-          agentId: requesterAgentId ?? params.agentId,
-          config: params.cfg,
-          sessionKey: requesterSessionKey,
-        });
-        if (parentEntry?.sessionId?.trim()) {
-          const decision = await realtimeVoiceAgentConsultDeps.resolveParentForkDecision({
-            parentEntry,
-            agentId: params.agentId,
-            config: params.cfg,
-          });
-          if (decision.status === "fork") {
-            const fork = await realtimeVoiceAgentConsultDeps.forkSessionFromParent({
-              parentEntry,
-              agentId: params.agentId,
-              config: params.cfg,
-            });
-            if (fork) {
-              return {
-                ...deliveryFields,
-                sessionId: fork.sessionId,
-                // Current fork storage is file-backed; persist the artifact on
-                // the entry so the run target resolver reuses the forked branch.
-                sessionFile: fork.sessionFile,
-                spawnedBy: requesterSessionKey,
-                forkedFromParent: true,
-                updatedAt: now,
-              };
-            }
-          } else {
-            forkDecisionWarning = decision.message;
-          }
-        }
       }
       return {
         ...deliveryFields,
