@@ -67,6 +67,11 @@ describe("QQBot command visibility", () => {
     expect(classifyCoreCommandForGroup("/config", "strict").visibility).toBe("private");
   });
 
+  it("keeps strict mode fail-closed for unclassified slash commands", () => {
+    expect(classifyCoreCommandForGroup("/bot-dynamic", "strict").visibility).toBe("private");
+    expect(classifyCoreCommandForGroup("/unknown", "strict").visibility).toBe("private");
+  });
+
   it("does not make plugin and unknown slash commands private in all mode", () => {
     expect(classifyCoreCommandForGroup("/bot-help").visibility).not.toBe("private");
     expect(classifyCoreCommandForGroup("/unknown").visibility).not.toBe("private");
