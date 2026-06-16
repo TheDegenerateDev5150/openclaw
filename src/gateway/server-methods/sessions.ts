@@ -81,7 +81,7 @@ import {
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
-  forkCompactionCheckpointTranscriptAsync,
+  createFileBackedCompactionCheckpointStore,
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
@@ -130,6 +130,8 @@ import type {
   RespondFn,
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
 
 function filterSessionStoreToConfiguredAgents(
   cfg: OpenClawConfig,
@@ -464,33 +466,6 @@ function cloneCheckpointSessionEntry(params: {
     compactionCheckpoints: params.preserveCompactionCheckpoints
       ? params.currentEntry.compactionCheckpoints
       : undefined,
-  };
-}
-
-function resolveCheckpointForkSource(
-  checkpoint: NonNullable<ReturnType<typeof getSessionCompactionCheckpoint>>,
-): { sourceFile: string; sourceLeafId?: string; totalTokens?: number } | null {
-  const preCompactionFile = checkpoint.preCompaction.sessionFile?.trim();
-  if (preCompactionFile) {
-    return {
-      sourceFile: preCompactionFile,
-      sourceLeafId: checkpoint.preCompaction.leafId,
-      totalTokens: checkpoint.tokensBefore,
-    };
-  }
-  const postCompactionFile = checkpoint.postCompaction.sessionFile?.trim();
-  if (!postCompactionFile) {
-    return null;
-  }
-  const postCompactionLeafId =
-    checkpoint.postCompaction.leafId ?? checkpoint.postCompaction.entryId;
-  if (!postCompactionLeafId) {
-    return null;
-  }
-  return {
-    sourceFile: postCompactionFile,
-    sourceLeafId: postCompactionLeafId,
-    totalTokens: checkpoint.tokensAfter,
   };
 }
 
@@ -1793,8 +1768,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
-    const forkSource = checkpoint ? resolveCheckpointForkSource(checkpoint) : null;
-    if (!checkpoint || !forkSource) {
+    if (!checkpoint) {
       respond(
         false,
         undefined,
@@ -1802,12 +1776,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const branchedSession = await forkCompactionCheckpointTranscriptAsync({
-      sourceFile: forkSource.sourceFile,
-      sourceLeafId: forkSource.sourceLeafId,
-      sessionDir: path.dirname(forkSource.sourceFile),
+    const branchedSession = await compactionCheckpointStore.forkCheckpointTranscript({
+      checkpoint,
     });
-    if (!branchedSession?.sessionFile) {
+    if (branchedSession.status === "missing-boundary") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `checkpoint not found: ${checkpointId}`),
+      );
+      return;
+    }
+    if (branchedSession.status === "failed") {
       respond(
         false,
         undefined,
@@ -1815,15 +1795,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const branchedTranscript = branchedSession.transcript;
     const nextKey = buildDashboardSessionKey(target.agentId);
     const label = entry.label?.trim() ? `${entry.label.trim()} (checkpoint)` : "Checkpoint branch";
     const nextEntry = cloneCheckpointSessionEntry({
       currentEntry: entry,
-      nextSessionId: branchedSession.sessionId,
-      nextSessionFile: branchedSession.sessionFile,
+      nextSessionId: branchedTranscript.sessionId,
+      nextSessionFile: branchedTranscript.sessionFile,
       label,
       parentSessionKey: canonicalKey,
-      totalTokens: forkSource.totalTokens,
+      totalTokens: branchedTranscript.totalTokens,
     });
 
     await updateSessionStore(target.storePath, (store) => {
@@ -1903,8 +1884,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
-    const forkSource = checkpoint ? resolveCheckpointForkSource(checkpoint) : null;
-    if (!checkpoint || !forkSource) {
+    if (!checkpoint) {
       respond(
         false,
         undefined,
@@ -1927,12 +1907,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const restoredSession = await forkCompactionCheckpointTranscriptAsync({
-      sourceFile: forkSource.sourceFile,
-      sourceLeafId: forkSource.sourceLeafId,
-      sessionDir: path.dirname(forkSource.sourceFile),
+    const restoredSession = await compactionCheckpointStore.restoreCheckpointTranscript({
+      checkpoint,
     });
-    if (!restoredSession?.sessionFile) {
+    if (restoredSession.status === "missing-boundary") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `checkpoint not found: ${checkpointId}`),
+      );
+      return;
+    }
+    if (restoredSession.status === "failed") {
       respond(
         false,
         undefined,
@@ -1940,11 +1926,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const restoredTranscript = restoredSession.transcript;
     const nextEntry = cloneCheckpointSessionEntry({
       currentEntry: entry,
-      nextSessionId: restoredSession.sessionId,
-      nextSessionFile: restoredSession.sessionFile,
-      totalTokens: forkSource.totalTokens,
+      nextSessionId: restoredTranscript.sessionId,
+      nextSessionFile: restoredTranscript.sessionFile,
+      totalTokens: restoredTranscript.totalTokens,
       preserveCompactionCheckpoints: true,
     });
 

@@ -39,6 +39,58 @@ type ForkedCompactionCheckpointTranscript = {
   sessionFile: string;
 };
 
+export type CompactionCheckpointForkedTranscript = ForkedCompactionCheckpointTranscript & {
+  totalTokens?: number;
+};
+
+export type CompactionCheckpointTranscriptForkResult =
+  | { status: "created"; transcript: CompactionCheckpointForkedTranscript }
+  | { status: "missing-boundary" }
+  | { status: "failed" };
+
+export type PersistSessionCompactionCheckpointParams = {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  sessionId: string;
+  reason: SessionCompactionCheckpointReason;
+  snapshot: CapturedCompactionCheckpointSnapshot;
+  summary?: string;
+  firstKeptEntryId?: string;
+  tokensBefore?: number;
+  tokensAfter?: number;
+  postSessionFile?: string;
+  postLeafId?: string;
+  postEntryId?: string;
+  createdAt?: number;
+};
+
+/**
+ * Storage boundary for compaction checkpoint capture, persistence, branch,
+ * restore, and cleanup operations.
+ */
+export type CompactionCheckpointStore = {
+  /** Captures the pre-compaction transcript identity without copying rows/files. */
+  captureSnapshot: typeof captureCompactionCheckpointSnapshotAsync;
+  /** Persists checkpoint metadata and prunes checkpoint artifacts owned by this store. */
+  persistCheckpoint: (
+    params: PersistSessionCompactionCheckpointParams,
+  ) => Promise<SessionCompactionCheckpoint | null>;
+  /** Cleans unpersisted legacy snapshot artifacts after failed persistence. */
+  cleanupSnapshot: typeof cleanupCompactionCheckpointSnapshot;
+  /** Creates a new branch transcript from the checkpoint boundary. */
+  forkCheckpointTranscript: (params: {
+    checkpoint: SessionCompactionCheckpoint;
+    sessionDir?: string;
+    targetCwd?: string;
+  }) => Promise<CompactionCheckpointTranscriptForkResult>;
+  /** Restores a session transcript from the checkpoint boundary. */
+  restoreCheckpointTranscript: (params: {
+    checkpoint: SessionCompactionCheckpoint;
+    sessionDir?: string;
+    targetCwd?: string;
+  }) => Promise<CompactionCheckpointTranscriptForkResult>;
+};
+
 function checkpointSnapshotPath(checkpoint: SessionCompactionCheckpoint): string | undefined {
   return checkpoint.preCompaction.sessionFile?.trim() || undefined;
 }
@@ -404,6 +456,82 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
   }
 }
 
+function resolveCheckpointTranscriptForkSource(
+  checkpoint: SessionCompactionCheckpoint,
+): { sourceFile: string; sourceLeafId?: string; totalTokens?: number } | null {
+  const preCompactionFile = checkpoint.preCompaction.sessionFile?.trim();
+  if (preCompactionFile) {
+    return {
+      sourceFile: preCompactionFile,
+      sourceLeafId: checkpoint.preCompaction.leafId,
+      totalTokens: checkpoint.tokensBefore,
+    };
+  }
+
+  const postCompactionFile = checkpoint.postCompaction.sessionFile?.trim();
+  if (!postCompactionFile) {
+    return null;
+  }
+  const postCompactionLeafId =
+    checkpoint.postCompaction.leafId ?? checkpoint.postCompaction.entryId;
+  if (!postCompactionLeafId) {
+    return null;
+  }
+  return {
+    sourceFile: postCompactionFile,
+    sourceLeafId: postCompactionLeafId,
+    totalTokens: checkpoint.tokensAfter,
+  };
+}
+
+async function forkCheckpointTranscriptFromStoredBoundary(params: {
+  checkpoint: SessionCompactionCheckpoint;
+  sessionDir?: string;
+  targetCwd?: string;
+}): Promise<CompactionCheckpointTranscriptForkResult> {
+  const forkSource = resolveCheckpointTranscriptForkSource(params.checkpoint);
+  if (!forkSource) {
+    return { status: "missing-boundary" };
+  }
+  const forked = await forkCompactionCheckpointTranscriptAsync({
+    sourceFile: forkSource.sourceFile,
+    sourceLeafId: forkSource.sourceLeafId,
+    sessionDir: params.sessionDir ?? path.dirname(forkSource.sourceFile),
+    ...(params.targetCwd ? { targetCwd: params.targetCwd } : {}),
+  });
+  if (!forked) {
+    return { status: "failed" };
+  }
+  return {
+    status: "created",
+    transcript: {
+      ...forked,
+      ...(typeof forkSource.totalTokens === "number"
+        ? { totalTokens: forkSource.totalTokens }
+        : {}),
+    },
+  };
+}
+
+/**
+ * Creates the current file-backed compaction checkpoint domain store.
+ *
+ * SQLite storage should implement this same boundary transactionally: checkpoint
+ * metadata and transcript leaf/sequence boundaries belong in SQLite, and
+ * branch/restore should copy or select transcript rows through the stored
+ * boundary inside one write transaction. Filesystem cleanup is only for legacy
+ * imported snapshot artifacts or explicit export/debug transcript artifacts.
+ */
+export function createFileBackedCompactionCheckpointStore(): CompactionCheckpointStore {
+  return {
+    captureSnapshot: captureCompactionCheckpointSnapshotAsync,
+    persistCheckpoint: persistSessionCompactionCheckpoint,
+    cleanupSnapshot: cleanupCompactionCheckpointSnapshot,
+    forkCheckpointTranscript: forkCheckpointTranscriptFromStoredBoundary,
+    restoreCheckpointTranscript: forkCheckpointTranscriptFromStoredBoundary,
+  };
+}
+
 /**
  * Capture the stable pre-compaction identity without duplicating the transcript.
  * Branch/restore uses the compacted successor transcript, while legacy
@@ -501,21 +629,9 @@ async function cleanupTrimmedCompactionCheckpointFiles(params: {
   }
 }
 
-export async function persistSessionCompactionCheckpoint(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  sessionId: string;
-  reason: SessionCompactionCheckpointReason;
-  snapshot: CapturedCompactionCheckpointSnapshot;
-  summary?: string;
-  firstKeptEntryId?: string;
-  tokensBefore?: number;
-  tokensAfter?: number;
-  postSessionFile?: string;
-  postLeafId?: string;
-  postEntryId?: string;
-  createdAt?: number;
-}): Promise<SessionCompactionCheckpoint | null> {
+export async function persistSessionCompactionCheckpoint(
+  params: PersistSessionCompactionCheckpointParams,
+): Promise<SessionCompactionCheckpoint | null> {
   const snapshotSessionFile = params.snapshot.sessionFile?.trim();
   const postSessionFile = params.postSessionFile?.trim();
   const postSourceLeafId = params.postLeafId?.trim() || params.postEntryId?.trim();

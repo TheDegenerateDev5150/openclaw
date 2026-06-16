@@ -5,9 +5,7 @@ import {
 } from "../../context-engine/registry.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import {
-  captureCompactionCheckpointSnapshotAsync,
-  cleanupCompactionCheckpointSnapshot,
-  persistSessionCompactionCheckpoint,
+  createFileBackedCompactionCheckpointStore,
   readSessionLeafIdFromTranscriptAsync,
   resolveSessionCompactionCheckpointReason,
   type CapturedCompactionCheckpointSnapshot,
@@ -53,6 +51,8 @@ import { readAgentModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 import { normalizeContextTokenBudget } from "./utils.js";
+
+const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
 
 function shouldFallbackAfterHarnessCompaction(
   result: EmbeddedAgentCompactResult | undefined,
@@ -304,7 +304,7 @@ export async function compactEmbeddedAgentSession(
         // are notified regardless of which engine is active.
         const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
         checkpointSnapshot = engineOwnsCompaction
-          ? await captureCompactionCheckpointSnapshotAsync({
+          ? await compactionCheckpointStore.captureSnapshot({
               sessionFile: params.sessionFile,
             })
           : null;
@@ -427,7 +427,7 @@ export async function compactEmbeddedAgentSession(
                 postCompactionLeafId ??
                 (await readSessionLeafIdFromTranscriptAsync(postCompactionSessionFile)) ??
                 undefined;
-              const storedCheckpoint = await persistSessionCompactionCheckpoint({
+              const storedCheckpoint = await compactionCheckpointStore.persistCheckpoint({
                 cfg: params.config,
                 sessionKey: params.sessionKey,
                 sessionId: postCompactionSessionId,
@@ -516,7 +516,7 @@ export async function compactEmbeddedAgentSession(
         };
       } finally {
         if (!checkpointSnapshotRetained) {
-          await cleanupCompactionCheckpointSnapshot(checkpointSnapshot);
+          await compactionCheckpointStore.cleanupSnapshot(checkpointSnapshot);
         }
         await contextEngine.dispose?.();
       }

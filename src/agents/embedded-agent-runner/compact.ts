@@ -5,9 +5,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  captureCompactionCheckpointSnapshotAsync,
-  cleanupCompactionCheckpointSnapshot,
-  persistSessionCompactionCheckpoint,
+  createFileBackedCompactionCheckpointStore,
   resolveSessionCompactionCheckpointReason,
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
@@ -183,6 +181,8 @@ export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 type CompactEmbeddedAgentSessionParamsWithSessionFile = CompactEmbeddedAgentSessionRuntimeParams & {
   sessionFile: string;
 };
+
+const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
 
 function hasRealConversationContent(
   msg: AgentMessage,
@@ -1134,7 +1134,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
             : undefined,
         allowedToolNames,
       });
-      checkpointSnapshot = await captureCompactionCheckpointSnapshotAsync({
+      checkpointSnapshot = await compactionCheckpointStore.captureSnapshot({
         sessionManager,
         sessionFile: params.sessionFile,
       });
@@ -1455,7 +1455,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           });
           if (params.config && params.sessionKey && checkpointSnapshot) {
             try {
-              const storedCheckpoint = await persistSessionCompactionCheckpoint({
+              const storedCheckpoint = await compactionCheckpointStore.persistCheckpoint({
                 cfg: params.config,
                 sessionKey: params.sessionKey,
                 sessionId: activeSessionId,
@@ -1579,7 +1579,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     return fail(reason, err);
   } finally {
     if (!checkpointSnapshotRetained) {
-      await cleanupCompactionCheckpointSnapshot(checkpointSnapshot);
+      await compactionCheckpointStore.cleanupSnapshot(checkpointSnapshot);
     }
     restoreSkillEnv?.();
   }

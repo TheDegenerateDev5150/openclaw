@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
   cleanupCompactionCheckpointSnapshot,
+  createFileBackedCompactionCheckpointStore,
   forkCompactionCheckpointTranscriptAsync,
   MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
   MAX_COMPACTION_CHECKPOINT_RETAINED_BYTES_PER_SESSION,
@@ -295,6 +296,59 @@ describe("session-compaction-checkpoints", () => {
       throw new Error("expected forked checkpoint transcript");
     }
     const messages = SessionManager.open(forked.sessionFile, dir).buildSessionContext().messages;
+    expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "checkpoint source",
+    ]);
+  });
+
+  test("file-backed checkpoint store restores from the stored transcript boundary", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-store-"));
+    tempDirs.push(dir);
+
+    const session = SessionManager.create(dir, dir);
+    session.appendMessage({
+      role: "user",
+      content: "checkpoint source",
+      timestamp: Date.now(),
+    });
+    const checkpointLeafId = requireNonEmptyString(
+      session.getLeafId(),
+      "checkpoint leaf id missing",
+    );
+    session.appendMessage({
+      role: "assistant",
+      content: "future turn",
+      api: "responses",
+      provider: "openai",
+      model: "gpt-test",
+      timestamp: Date.now(),
+    } as unknown as AssistantMessage);
+
+    const sessionFile = requireNonEmptyString(session.getSessionFile(), "session file missing");
+    const store = createFileBackedCompactionCheckpointStore();
+    const restored = await store.restoreCheckpointTranscript({
+      checkpoint: {
+        checkpointId: "checkpoint-1",
+        sessionKey: "agent:main:main",
+        sessionId: "stored-session",
+        createdAt: Date.now(),
+        reason: "manual",
+        tokensAfter: 45,
+        preCompaction: { sessionId: "pre-session", leafId: "pre-leaf" },
+        postCompaction: {
+          sessionId: "post-session",
+          sessionFile,
+          leafId: checkpointLeafId,
+        },
+      },
+    });
+
+    if (restored.status !== "created") {
+      throw new Error("expected restored checkpoint transcript");
+    }
+    expect(restored.transcript.totalTokens).toBe(45);
+    const messages = SessionManager.open(restored.transcript.sessionFile, dir).buildSessionContext()
+      .messages;
     expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
       "checkpoint source",
     ]);
