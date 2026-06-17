@@ -1847,6 +1847,9 @@
                   "reference/full-release-validation",
                   "reference/maturity-tests",
                   "reference/release-performance-sweep",
+                  "maturity-scorecard",
+                  "taxonomy",
+                  "taxonomy-outline",
                   "reference/test",
                   "ci",
                   "help/scripts"
