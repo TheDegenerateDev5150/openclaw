@@ -112,6 +112,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Gateway error: pairing required; approval in progress",
         connectSettling = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported,
       ),
     )
   }
@@ -230,6 +231,7 @@ class OnboardingFlowLogicTest {
         ready = false,
         statusText = "Gateway error: connection refused",
         connectSettling = false,
+        nodeCapabilityApprovalState = GatewayNodeApprovalState.Unsupported,
       ),
     )
   }
