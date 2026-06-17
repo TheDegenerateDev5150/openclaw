@@ -5,9 +5,10 @@ import type { AgentToolResult } from "../../../agents/runtime/index.js";
 import { setToolTerminalPresentation } from "../../../agents/tool-terminal-presentation.js";
 import type { AnyAgentTool } from "../../../agents/tools/common.js";
 import type {
-  CodexAppServerExtensionFactory,
-  CodexAppServerToolResultEvent,
-} from "../../../plugins/codex-app-server-extension-types.js";
+  AgentToolResultMiddleware,
+  AgentToolResultMiddlewareEvent,
+} from "../../../plugins/agent-tool-result-middleware-types.js";
+import type { CodexAppServerToolResultEvent } from "../../../plugins/codex-app-server-extension-types.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -92,18 +93,25 @@ export function installOpenClawOwnedToolHooks(params?: {
 export function installCodexToolResultMiddleware(
   handler: (event: CodexAppServerToolResultEvent) => AgentToolResult<unknown>,
 ) {
-  const middleware = vi.fn(async (event: CodexAppServerToolResultEvent) => ({
-    result: handler(event),
-  }));
+  const middleware: AgentToolResultMiddleware = vi.fn(
+    async (event: AgentToolResultMiddlewareEvent) => ({
+      result: handler({
+        threadId: event.threadId ?? "",
+        turnId: event.turnId ?? "",
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        args: event.args,
+        result: event.result,
+      }),
+    }),
+  );
   const registry = createEmptyPluginRegistry();
-  const factory: CodexAppServerExtensionFactory = async (codex) => {
-    codex.on("tool_result", middleware);
-  };
-  registry.codexAppServerExtensionFactories.push({
+  registry.agentToolResultMiddlewares.push({
     pluginId: "runtime-contract",
     pluginName: "Runtime Contract",
-    rawFactory: factory,
-    factory,
+    rawHandler: middleware,
+    handler: middleware,
+    runtimes: ["codex"],
     source: "test",
   });
   setActivePluginRegistry(registry);
