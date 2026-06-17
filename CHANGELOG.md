@@ -2,6 +2,16 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.6.9-alpha.6
+
+### Changes
+
+- Alpha nightly from current `main`, including unreleased agent, release, plugin, UI, mobile, and channel changes since 2026.6.8.
+
+### Fixes
+
+- Release validation now skips generated plugin asset bundles in the database-first legacy-store guard, and alpha release packaging includes refreshed plugin shrinkwrap evidence for 2026.6.9-alpha.6.
+
 ## 2026.6.8
 
 ### Highlights
