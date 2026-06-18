@@ -19,7 +19,10 @@ import MarkdownIt from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { i18n, t } from "../i18n/index.ts";
-import { encodeBlockArtCodeBlockCopyPayload } from "./chat/code-block-copy-payload.ts";
+import {
+  blockArtCodeBlockCopyPayloadEncoding,
+  encodeBlockArtCodeBlockCopyPayload,
+} from "./chat/code-block-copy-payload.ts";
 import { truncateText } from "./format.ts";
 import { inferBasePathFromPathname, normalizeBasePath, tabFromPath } from "./navigation.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
@@ -72,6 +75,7 @@ const allowedAttrs = [
   "src",
   "alt",
   "data-code",
+  "data-code-encoding",
   "type",
   "aria-label",
 ];
@@ -751,7 +755,10 @@ function renderCodeBlock(
   const copyText = options.copyText ?? text;
   const copyPayload = blockArt ? encodeBlockArtCodeBlockCopyPayload(copyText) : copyText;
   const attrSafe = escapeHtml(copyPayload);
-  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
+  const encodingAttr = blockArt
+    ? ` data-code-encoding="${blockArtCodeBlockCopyPayloadEncoding}"`
+    : "";
+  const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}"${encodingAttr} aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
   const header = `<div class="code-block-header">${langLabel}${copyBtn}</div>`;
 
   const trimmed = text.trim();

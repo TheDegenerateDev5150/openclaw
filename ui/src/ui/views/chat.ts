@@ -2031,7 +2031,8 @@ export function renderChat(props: ChatProps) {
     if (!btn) {
       return;
     }
-    const code = decodeCodeBlockCopyPayload((btn as HTMLElement).dataset.code ?? "");
+    const button = btn as HTMLElement;
+    const code = decodeCodeBlockCopyPayload(button.dataset.code ?? "", button.dataset.codeEncoding);
     void copyToClipboard(code).then((copied) => {
       if (!copied) {
         return;

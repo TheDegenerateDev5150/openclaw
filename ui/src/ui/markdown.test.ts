@@ -2,7 +2,10 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { decodeCodeBlockCopyPayload } from "./chat/code-block-copy-payload.ts";
+import {
+  blockArtCodeBlockCopyPayloadEncoding,
+  decodeCodeBlockCopyPayload,
+} from "./chat/code-block-copy-payload.ts";
 import {
   md,
   toSanitizedMarkdownHtml,
@@ -379,6 +382,7 @@ describe("toSanitizedMarkdownHtml", () => {
 
       expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("ts");
       expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "")).toBe("console.log(1)");
+      expect(copy?.dataset.codeEncoding).toBeUndefined();
       expect(code?.classList.contains("language-ts")).toBe(true);
       expect(code?.textContent).toBe("console.log(1)\n");
     });
@@ -458,9 +462,23 @@ PY
       expect(fragment.querySelector(".code-block-lang")?.textContent).toBe("js");
       expect(copy?.dataset.code).toBe(source.trimEnd());
       expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "")).toBe(source.trimEnd());
+      expect(copy?.dataset.codeEncoding).toBeUndefined();
       expect(code?.textContent).toBe(source);
       expect(code?.querySelector(".hljs-keyword")?.textContent).toBe("const");
       expect(code?.querySelector(".hljs-string")?.textContent).toBe('"yes"');
+    });
+
+    it("keeps ordinary code blocks raw when they start with the block-art prefix", () => {
+      const source = 'openclaw:block-art-code:"literal"\n';
+      const html = toSanitizedMarkdownHtml(`\`\`\`txt\n${source}\`\`\``);
+      const fragment = htmlFragment(html);
+      const copy = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
+
+      expect(copy?.dataset.code).toBe(source.trimEnd());
+      expect(copy?.dataset.codeEncoding).toBeUndefined();
+      expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "", copy?.dataset.codeEncoding)).toBe(
+        source.trimEnd(),
+      );
     });
 
     it("keeps boundary spaces in encoded copy payloads after sanitization", () => {
@@ -471,7 +489,10 @@ PY
 
       expect(copy?.dataset.code).not.toMatch(/^\s|\s$/);
       expect(copy?.dataset.code).toContain("openclaw:block-art-code:");
-      expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "")).toBe(source);
+      expect(copy?.dataset.codeEncoding).toBe(blockArtCodeBlockCopyPayloadEncoding);
+      expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "", copy?.dataset.codeEncoding)).toBe(
+        source,
+      );
       expect(fragment.querySelector("pre code")?.textContent).toBe(`${source}\n`);
     });
 
@@ -811,7 +832,10 @@ describe("toStreamingMarkdownHtml", () => {
     expect(code?.textContent).toContain(`showing first 140000`);
     expect(code?.textContent?.length).toBeLessThan(blockArt.length);
     expect(copy?.dataset.code).toContain("openclaw:block-art-code:");
-    expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "")).toBe(code?.textContent);
+    expect(copy?.dataset.codeEncoding).toBe(blockArtCodeBlockCopyPayloadEncoding);
+    expect(decodeCodeBlockCopyPayload(copy?.dataset.code ?? "", copy?.dataset.codeEncoding)).toBe(
+      code?.textContent,
+    );
   });
 
   it("renders completed block prefixes as markdown and keeps the open tail plain", () => {
