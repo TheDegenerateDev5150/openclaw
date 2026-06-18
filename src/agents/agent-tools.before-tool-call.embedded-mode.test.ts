@@ -5,7 +5,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import {
+  getGlobalHookRunner,
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -69,6 +73,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
   let runBeforeToolCallMock: ReturnType<typeof vi.fn<HookRunner["runBeforeToolCall"]>>;
 
   beforeEach(() => {
+    resetGlobalHookRunner();
     runBeforeToolCallMock = vi.fn<HookRunner["runBeforeToolCall"]>();
     hookRunner = {
       hasHooks: vi.fn<HookRunner["hasHooks"]>().mockReturnValue(true),
@@ -82,6 +87,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
   afterEach(() => {
     setEmbeddedMode(false);
     setActivePluginRegistry(createEmptyPluginRegistry());
+    resetGlobalHookRunner();
   });
 
   it("blocks approval-required tools in embedded mode when no gateway approval route exists", async () => {
@@ -442,6 +448,46 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       params: { action: "apply", proposal_id: "weather-20260530-a1b2c3d4e5" },
     });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(runBeforeToolCallMock).not.toHaveBeenCalled();
+  });
+
+  it("runs trusted policies from the global hook registry after the active registry changes", async () => {
+    const evaluatePolicy = vi.fn(() => ({
+      block: true,
+      blockReason: "gateway registry policy blocked",
+    }));
+    const gatewayRegistry = createEmptyPluginRegistry();
+    gatewayRegistry.trustedToolPolicies = [
+      {
+        pluginId: "gateway-policy",
+        pluginName: "Gateway Policy",
+        source: "test",
+        policy: {
+          id: "gateway-block",
+          description: "Gateway policy",
+          evaluate: evaluatePolicy,
+        },
+      },
+    ];
+    initializeGlobalHookRunner(gatewayRegistry);
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    runBeforeToolCallMock.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "deploy" },
+      toolCallId: "call-gateway-policy",
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toEqual({
+      blocked: true,
+      kind: "veto",
+      deniedReason: "plugin-before-tool-call",
+      reason: "gateway registry policy blocked",
+      params: { command: "deploy" },
+    });
+    expect(evaluatePolicy).toHaveBeenCalledTimes(1);
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();
   });
 
