@@ -88,6 +88,7 @@ type MatrixQaScenarioResult = {
   artifacts?: MatrixQaScenarioArtifacts;
   details: string;
   id: string;
+  standardId?: string;
   status: "fail" | "pass";
   title: string;
 };
@@ -146,9 +147,10 @@ type MatrixQaSummary = {
 };
 
 type MatrixQaArtifactPaths = {
+  evidence: string;
+  matrixSummary: string;
   observedEvents: string;
   report: string;
-  summary: string;
 };
 
 type MatrixQaScenarioTiming = {
@@ -340,6 +342,7 @@ function buildMatrixQaScenarioResult(params: {
   details: string;
   scenario: {
     id: string;
+    standardId?: string;
     title: string;
   };
   status: "fail" | "pass";
@@ -347,6 +350,7 @@ function buildMatrixQaScenarioResult(params: {
   return {
     artifacts: params.artifacts,
     id: params.scenario.id,
+    standardId: params.scenario.standardId,
     title: params.scenario.title,
     status: params.status,
     details: formatMatrixQaScenarioDetails({
@@ -462,7 +466,7 @@ function buildMatrixQaSummary(params: {
     reportPath: params.artifactPaths.report,
     scenarios: params.scenarios,
     startedAt: params.startedAt,
-    summaryPath: params.artifactPaths.summary,
+    summaryPath: params.artifactPaths.matrixSummary,
     sutAccountId: params.sutAccountId,
     timings: params.timings,
     userIds: params.userIds,
@@ -1082,12 +1086,15 @@ export async function runMatrixQaLive(params: {
   const finishedAtDate = new Date();
   const finishedAt = finishedAtDate.toISOString();
   const reportPath = path.join(outputDir, "matrix-qa-report.md");
-  const summaryPath = path.join(outputDir, "matrix-qa-summary.json");
+  const qaRuntime = loadQaRuntimeModule();
+  const summaryPath = path.join(outputDir, qaRuntime.QA_EVIDENCE_FILENAME);
+  const matrixSummaryPath = path.join(outputDir, "matrix-qa-summary.json");
   const observedEventsPath = path.join(outputDir, "matrix-qa-observed-events.json");
   const artifactPaths = {
+    evidence: summaryPath,
+    matrixSummary: matrixSummaryPath,
     observedEvents: observedEventsPath,
     report: reportPath,
-    summary: summaryPath,
   } satisfies MatrixQaArtifactPaths;
   const report = renderQaMarkdownReport({
     title: "Matrix QA Report",
@@ -1170,7 +1177,37 @@ export async function runMatrixQaLive(params: {
   );
   summary.timings.artifactWriteMs = Date.now() - artifactWriteStartedAtMs;
   summary.timings.totalMs = Date.now() - runStartedAtMs;
-  await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, {
+  await fs.writeFile(matrixSummaryPath, `${JSON.stringify(summary, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  const evidence = qaRuntime.buildLiveTransportEvidenceSummary({
+    artifactPaths: [
+      { kind: "summary", path: path.basename(summaryPath) },
+      { kind: "matrix-summary", path: path.basename(matrixSummaryPath) },
+      { kind: "report", path: path.basename(reportPath) },
+      { kind: "transport-observations", path: path.basename(observedEventsPath) },
+    ],
+    checks: completedScenarioResults.map(({ artifacts, standardId, ...check }) => ({
+      ...check,
+      artifactPaths: artifacts
+        ? Object.fromEntries(
+            Object.entries(artifacts).flatMap(([kind, artifactPath]) =>
+              typeof artifactPath === "string"
+                ? [[kind, path.relative(outputDir, artifactPath)]]
+                : [],
+            ),
+          )
+        : undefined,
+      coverageIds: standardId ? [`channels.matrix.${standardId}`] : undefined,
+    })),
+    env: process.env,
+    generatedAt: finishedAt,
+    primaryModel: defaultModels.primaryModel,
+    providerMode: defaultModels.providerMode,
+    transportId: "matrix",
+  });
+  await fs.writeFile(summaryPath, `${JSON.stringify(evidence, null, 2)}\n`, {
     encoding: "utf8",
     mode: 0o600,
   });

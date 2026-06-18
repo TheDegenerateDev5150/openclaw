@@ -77,9 +77,14 @@ needs an OpenClaw root profile, put the root profile before the QA command:
 pnpm openclaw --profile work qa run --qa-profile smoke-ci
 ```
 
-QA profiles select the channel driver: `smoke-ci` uses the Crabline SDK-backed
-channel driver, and `release` uses `live`. Scenarios set `execution.channel`
-only when they need a specific channel; otherwise the driver default is used.
+QA profiles select the channel driver. `smoke-ci` runs the taxonomy scenario set
+through the Crabline SDK-backed channel driver with mock model providers.
+`release` uses the native live driver: it runs the Matrix, Telegram, Discord,
+Slack, and WhatsApp live lane catalogs, reads each lane's native
+`qa-evidence.json`, and writes one merged profile `qa-evidence.json`. Scenarios
+set `execution.channel` only when they need a specific live channel; unsupported
+channels are reported as missing live coverage instead of falling back to
+`qa-channel`.
 
 ## Operator flow
 
@@ -961,7 +966,9 @@ writes its own `qa-evidence.json`, whose entries are imported into the suite
 output and whose artifact paths are resolved relative to that producer
 `qa-evidence.json`. When `qa suite` is reached through
 `qa run --qa-profile`, the same `qa-evidence.json` also includes the profile
-scorecard summary for the selected taxonomy categories.
+scorecard summary for the selected taxonomy categories. Live profile runs do not
+enter `qa suite`; they merge the native `qa-evidence.json` files written by the
+live lane catalogs and then attach the same profile scorecard summary.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
 
 For character and style checks, run the same scenario across multiple live model
