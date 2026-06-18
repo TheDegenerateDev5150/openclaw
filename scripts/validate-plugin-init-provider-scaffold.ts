@@ -41,9 +41,9 @@ function readInspectorReport(): InspectorReport {
 }
 
 function assertCleanInspectorReport(report: InspectorReport): void {
-  const breakageCount = Number(report.summary?.breakageCount ?? NaN);
-  const warningCount = Number(report.summary?.warningCount ?? NaN);
-  const issueCount = Number(report.summary?.issueCount ?? NaN);
+  const breakageCount = Number(report.summary?.breakageCount ?? Number.NaN);
+  const warningCount = Number(report.summary?.warningCount ?? Number.NaN);
+  const issueCount = Number(report.summary?.issueCount ?? Number.NaN);
   if (report.status !== "pass" || breakageCount !== 0 || warningCount !== 0 || issueCount !== 0) {
     throw new Error(
       `Plugin Inspector was not clean: status=${String(
