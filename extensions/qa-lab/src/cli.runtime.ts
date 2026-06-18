@@ -1,6 +1,8 @@
 // Qa Lab plugin module implements cli behavior.
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -34,6 +36,14 @@ import {
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
+import {
+  QA_EVIDENCE_FILENAME,
+  QA_EVIDENCE_SUMMARY_KIND,
+  QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
+  validateQaEvidenceSummaryJson,
+  type QaEvidenceSummaryEntry,
+  type QaEvidenceSummaryJson,
+} from "./evidence-summary.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import {
   createMockJsonlReplayCellRunner,
@@ -42,6 +52,11 @@ import {
   type JsonlReplayInput,
 } from "./jsonl-replay.js";
 import { startQaLabServer } from "./lab-server.js";
+import {
+  isQaLiveSupportedChannel,
+  QA_LIVE_SUPPORTED_CHANNELS,
+  type QaLiveChannelId,
+} from "./live-channel-driver.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
@@ -99,6 +114,7 @@ import {
 const QA_SUITE_INFRA_RETRY_LIMIT = 1;
 const QA_CREDENTIAL_PAYLOAD_MAX_BYTES_ENV = "OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES";
 const DEFAULT_QA_CREDENTIAL_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
+const execFileAsync = promisify(execFile);
 const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
@@ -744,6 +760,52 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     );
   }
 
+  if (profileReport.channelDriver === "live") {
+    const liveChannels = selectLiveProfileChannels({ scenarios });
+    if (liveChannels.unsupported.length > 0) {
+      process.stderr.write(
+        `QA run profile: ${profile}; unsupported live channel scenarios: ${liveChannels.unsupported.join(", ")}\n`,
+      );
+    }
+    if (liveChannels.supported.length === 0) {
+      throw new Error(
+        `qa run --qa-profile ${profile} did not resolve any supported live channels for provider mode ${normalizedProviderMode}.`,
+      );
+    }
+    process.stdout.write(
+      `QA run profile: ${profile}; categories: ${categories.length}; scenarios: ${scenarios.length}; live channels: ${liveChannels.supported.join(", ")}\n`,
+    );
+    let evidencePath: string | undefined;
+    await withTemporaryQaProfileEnv(profile, async () => {
+      const result = await runQaLiveProfileCommand({
+        repoRoot,
+        outputDir: opts.outputDir,
+        providerMode,
+        primaryModel,
+        alternateModel: opts.alternateModel,
+        fastMode: opts.fastMode,
+        allowFailures: opts.allowFailures,
+        channels: liveChannels.supported,
+      });
+      evidencePath = result.evidencePath;
+    });
+    if (!evidencePath) {
+      throw new Error("qa run --qa-profile did not produce qa-evidence.json.");
+    }
+    await attachQaProfileScorecardEvidenceToFile({
+      evidencePath,
+      evidenceMode: opts.evidenceMode,
+      profile,
+      filters: {
+        surface: opts.surface,
+        category: opts.category,
+      },
+      categories,
+    });
+    process.stdout.write(`QA profile scorecard: ${evidencePath}\n`);
+    return;
+  }
+
   process.stdout.write(
     `QA run profile: ${profile}; categories: ${categories.length}; scenarios: ${scenarios.length}\n`,
   );
@@ -780,6 +842,200 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     categories,
   });
   process.stdout.write(`QA profile scorecard: ${evidencePath}\n`);
+}
+
+function selectLiveProfileChannels(params: {
+  scenarios: readonly ReturnType<typeof readQaScenarioPack>["scenarios"][number][];
+}): { supported: QaLiveChannelId[]; unsupported: string[] } {
+  const explicitChannels = uniqueStrings(
+    params.scenarios
+      .map((scenario) => scenario.execution.channel?.trim().toLowerCase())
+      .filter((channel): channel is string => Boolean(channel)),
+  );
+  const hasDefaultChannelScenarios = params.scenarios.some(
+    (scenario) => !scenario.execution.channel?.trim(),
+  );
+  const supportedExplicitChannels = explicitChannels.filter(isQaLiveSupportedChannel);
+  const supported = (
+    hasDefaultChannelScenarios
+      ? uniqueStrings([...QA_LIVE_SUPPORTED_CHANNELS, ...supportedExplicitChannels])
+      : supportedExplicitChannels
+  ) as QaLiveChannelId[];
+  const unsupported = explicitChannels.filter((channel) => !isQaLiveSupportedChannel(channel));
+  return { supported, unsupported };
+}
+
+function resolveOpenClawCliEntrypoint() {
+  const entrypoint = process.argv[1]?.trim();
+  if (!entrypoint) {
+    throw new Error("qa live profile runs require a CLI entrypoint in process.argv[1].");
+  }
+  return entrypoint;
+}
+
+function appendOptionalLiveProfileArg(args: string[], flag: string, value: string | undefined) {
+  const normalized = value?.trim();
+  if (normalized) {
+    args.push(flag, normalized);
+  }
+}
+
+function buildLiveProfileLaneArgs(params: {
+  allowFailures?: boolean;
+  channel: QaLiveChannelId;
+  fastMode?: boolean;
+  outputDir: string;
+  primaryModel: string;
+  alternateModel?: string;
+  providerMode: QaProviderModeInput;
+  repoRoot: string;
+}) {
+  const args = [
+    resolveOpenClawCliEntrypoint(),
+    "qa",
+    params.channel,
+    "--repo-root",
+    params.repoRoot,
+    "--output-dir",
+    params.outputDir,
+    "--provider-mode",
+    params.providerMode,
+    "--model",
+    params.primaryModel,
+  ];
+  appendOptionalLiveProfileArg(args, "--alt-model", params.alternateModel);
+  if (params.fastMode === true) {
+    args.push("--fast");
+  }
+  if (params.allowFailures === true || params.channel !== "matrix") {
+    args.push("--allow-failures");
+  }
+  if (params.channel !== "matrix") {
+    appendOptionalLiveProfileArg(
+      args,
+      "--credential-source",
+      process.env.OPENCLAW_QA_CREDENTIAL_SOURCE,
+    );
+    appendOptionalLiveProfileArg(
+      args,
+      "--credential-role",
+      process.env.OPENCLAW_QA_CREDENTIAL_ROLE,
+    );
+  }
+  return args;
+}
+
+function prefixLiveProfileEvidenceArtifactPaths(
+  entry: QaEvidenceSummaryEntry,
+  channel: QaLiveChannelId,
+): QaEvidenceSummaryEntry {
+  if (!entry.execution?.artifacts.length) {
+    return entry;
+  }
+  return {
+    ...entry,
+    execution: {
+      ...entry.execution,
+      artifacts: entry.execution.artifacts.map((artifact) => ({
+        ...artifact,
+        path: path.posix.join(channel, artifact.path),
+      })),
+    },
+  };
+}
+
+async function readLiveProfileLaneEvidence(params: {
+  channel: QaLiveChannelId;
+  outputDir: string;
+}): Promise<QaEvidenceSummaryJson> {
+  const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
+  try {
+    return validateQaEvidenceSummaryJson(JSON.parse(await fs.readFile(evidencePath, "utf8")));
+  } catch (error) {
+    throw new Error(
+      `Live QA lane ${params.channel} did not produce valid ${QA_EVIDENCE_FILENAME} at ${evidencePath}: ${formatErrorMessage(error)}`,
+    );
+  }
+}
+
+async function writeLiveProfileEvidence(params: {
+  evidencePath: string;
+  generatedAt: string;
+  laneEvidence: readonly {
+    channel: QaLiveChannelId;
+    evidence: QaEvidenceSummaryJson;
+  }[];
+}) {
+  const evidence = validateQaEvidenceSummaryJson({
+    kind: QA_EVIDENCE_SUMMARY_KIND,
+    schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
+    generatedAt: params.generatedAt,
+    evidenceMode: "full",
+    entries: params.laneEvidence.flatMap(({ channel, evidence }) =>
+      evidence.entries.map((entry) => prefixLiveProfileEvidenceArtifactPaths(entry, channel)),
+    ),
+  });
+  await fs.writeFile(params.evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
+  return evidence;
+}
+
+async function runQaLiveProfileCommand(params: {
+  allowFailures?: boolean;
+  alternateModel?: string;
+  channels: readonly QaLiveChannelId[];
+  fastMode?: boolean;
+  outputDir?: string;
+  primaryModel: string;
+  providerMode: QaProviderModeInput;
+  repoRoot: string;
+}) {
+  const outputDir =
+    resolveRepoRelativeOutputDir(params.repoRoot, params.outputDir) ??
+    path.join(params.repoRoot, ".artifacts", "qa-e2e", `live-${Date.now().toString(36)}`);
+  await fs.mkdir(outputDir, { recursive: true });
+  const laneEvidence: Array<{ channel: QaLiveChannelId; evidence: QaEvidenceSummaryJson }> = [];
+  for (const channel of params.channels) {
+    const channelOutputDir = path.join(outputDir, channel);
+    const channelOutputArg = path.relative(params.repoRoot, channelOutputDir);
+    await fs.mkdir(channelOutputDir, { recursive: true });
+    const args = buildLiveProfileLaneArgs({
+      allowFailures: params.allowFailures,
+      channel,
+      fastMode: params.fastMode,
+      outputDir: channelOutputArg,
+      primaryModel: params.primaryModel,
+      alternateModel: params.alternateModel,
+      providerMode: params.providerMode,
+      repoRoot: params.repoRoot,
+    });
+    process.stdout.write(`QA live profile lane: ${channel}; output: ${channelOutputDir}\n`);
+    await execFileAsync(process.execPath, args, {
+      cwd: params.repoRoot,
+      env: process.env,
+      maxBuffer: DEFAULT_QA_CREDENTIAL_PAYLOAD_MAX_BYTES,
+    });
+    laneEvidence.push({
+      channel,
+      evidence: await readLiveProfileLaneEvidence({
+        channel,
+        outputDir: channelOutputDir,
+      }),
+    });
+  }
+  const evidencePath = path.join(outputDir, QA_EVIDENCE_FILENAME);
+  const evidence = await writeLiveProfileEvidence({
+    evidencePath,
+    generatedAt: new Date().toISOString(),
+    laneEvidence,
+  });
+  if (
+    params.allowFailures !== true &&
+    evidence.entries.some((entry) => entry.result.status !== "pass")
+  ) {
+    process.exitCode = 1;
+  }
+  process.stdout.write(`QA live profile evidence: ${evidencePath}\n`);
+  return { evidencePath, outputDir };
 }
 
 function selectQaScenarioDefinitionsForChannelResolution(params: {
@@ -894,6 +1150,11 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
   const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
   const channelDriver = normalizeQaSuiteChannelDriver(opts.channelDriver);
+  if (channelDriver === "live") {
+    throw new Error(
+      "--channel-driver live is supported only through qa run --qa-profile profiles.",
+    );
+  }
   if (opts.channel?.trim() && channelDriver !== "crabline") {
     throw new Error("--channel requires --channel-driver crabline.");
   }

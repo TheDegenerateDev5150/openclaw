@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
+  execFileMock,
   runQaManualLane,
   runQaFlowSuiteFromRuntime,
   runQaSuite,
@@ -18,6 +19,7 @@ const {
   runQaDockerUp,
   defaultQaRuntimeModelForMode,
 } = vi.hoisted(() => ({
+  execFileMock: vi.fn(),
   runQaManualLane: vi.fn(),
   runQaFlowSuiteFromRuntime: vi.fn(),
   runQaSuite: vi.fn(),
@@ -32,6 +34,14 @@ const {
   defaultQaRuntimeModelForMode:
     vi.fn<(mode: string, options?: { alternate?: boolean }) => string>(),
 }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFile: execFileMock,
+  };
+});
 
 vi.mock("./manual-lane.runtime.js", () => ({
   runQaManualLane,
@@ -227,6 +237,20 @@ describe("qa cli runtime", () => {
     writeQaDockerHarnessFiles.mockReset();
     buildQaDockerHarnessImage.mockReset();
     runQaDockerUp.mockReset();
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((file, args: string[], _options, callback) => {
+      if (file === "crabline" && args.includes("providers")) {
+        callback(null, {
+          stdout: JSON.stringify({
+            support: [{ platform: "telegram", status: "ready" }],
+          }),
+          stderr: "",
+        });
+        return {};
+      }
+      callback(null, { stdout: "", stderr: "" });
+      return {};
+    });
     defaultQaRuntimeModelForMode.mockImplementation(
       (mode: string, options?: { alternate?: boolean }) =>
         defaultQaProviderModelForMode(mode as QaProviderModeInput, options),
@@ -500,18 +524,117 @@ describe("qa cli runtime", () => {
     }
   });
 
-  it("passes non-Crabline profile channel drivers as declarative suite metadata", async () => {
-    await runQaProfileCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      profile: "release",
-      surface: "agent-runtime-and-provider-execution",
-      category: "agent-runtime-and-provider-execution.agent-turn-execution",
-      providerMode: "mock-openai",
+  it("runs live profile channels through live lane evidence", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-live-profile-repo-"));
+    const outputDir = ".artifacts/qa-e2e/live-profile";
+    const resolvedOutputDir = path.join(repoRoot, outputDir);
+    execFileMock.mockImplementation((_file, args: string[], _options, callback) => {
+      const channel = args[2];
+      const repoRootIndex = args.indexOf("--repo-root");
+      const laneRepoRoot = args[repoRootIndex + 1];
+      const outputDirIndex = args.indexOf("--output-dir");
+      const laneOutputArg = args[outputDirIndex + 1];
+      const laneOutputDir = path.resolve(laneRepoRoot, laneOutputArg);
+      fs.mkdir(laneOutputDir, { recursive: true })
+        .then(() =>
+          fs.writeFile(
+            path.join(laneOutputDir, QA_EVIDENCE_FILENAME),
+            JSON.stringify(
+              makeQaEvidence([
+                {
+                  test: {
+                    kind: "live-transport-check",
+                    id: `${channel}-live-smoke`,
+                    title: `${channel} live smoke`,
+                  },
+                  coverage: [
+                    {
+                      id: `channels.${channel}.live`,
+                      role: "live-transport",
+                    },
+                  ],
+                  execution: {
+                    runner: "host",
+                    environment: {
+                      ref: null,
+                      os: process.platform,
+                      nodeVersion: process.version,
+                    },
+                    provider: {
+                      id: "openai",
+                      live: false,
+                      model: {
+                        name: "gpt-5.5",
+                        ref: "mock-openai/gpt-5.5",
+                      },
+                      fixture: "mock-openai",
+                    },
+                    channel: {
+                      id: channel,
+                      live: true,
+                      driver: "native",
+                    },
+                    packageSource: {
+                      kind: "source-checkout",
+                    },
+                    artifacts: [
+                      {
+                        kind: "report",
+                        path: "report.md",
+                        source: "live-transport",
+                      },
+                    ],
+                  },
+                  result: {
+                    status: "pass",
+                  },
+                },
+              ]),
+            ),
+            "utf8",
+          ),
+        )
+        .then(
+          () => callback(null, { stdout: "", stderr: "" }),
+          (error) => callback(error),
+        );
+      return {};
     });
 
-    const suiteArgs = mockFirstObjectArg(runQaSuite);
-    expect(suiteArgs.channelDriver).toBe("live");
-    expect(suiteArgs.channelDriverSelection).toBeUndefined();
+    try {
+      await runQaProfileCommand({
+        repoRoot,
+        outputDir,
+        profile: "release",
+        surface: "agent-runtime-and-provider-execution",
+        category: "agent-runtime-and-provider-execution.agent-turn-execution",
+        providerMode: "mock-openai",
+      });
+
+      expect(runQaSuite).not.toHaveBeenCalled();
+      expect(execFileMock).toHaveBeenCalledTimes(5);
+      const channels = execFileMock.mock.calls.map(([, args]) => (args as string[])[2]);
+      expect(channels).toEqual(["discord", "matrix", "slack", "telegram", "whatsapp"]);
+      const evidencePath = path.join(resolvedOutputDir, QA_EVIDENCE_FILENAME);
+      const evidence = JSON.parse(await fs.readFile(evidencePath, "utf8")) as {
+        entries?: Array<{ execution?: { artifacts?: Array<{ path?: string }> } }>;
+        profile?: unknown;
+        scorecard?: { run?: { evidenceEntryCount?: unknown } };
+      };
+      expect(evidence.profile).toBe("release");
+      expect(evidence.scorecard?.run?.evidenceEntryCount).toBe(5);
+      expect(evidence.entries?.map((entry) => entry.execution?.artifacts?.[0]?.path)).toEqual([
+        "discord/report.md",
+        "matrix/report.md",
+        "slack/report.md",
+        "telegram/report.md",
+        "whatsapp/report.md",
+      ]);
+      expectWriteContains(stdoutWrite, "QA run profile: release; categories: 1; scenarios:");
+      expectWriteContains(stdoutWrite, "live channels: discord, matrix, slack, telegram, whatsapp");
+    } finally {
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
   });
 
   it("rejects qa profile runs that do not match taxonomy categories", async () => {

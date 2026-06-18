@@ -34,9 +34,10 @@ function buildMatrixQaSummaryInput(
 
   return {
     artifactPaths: {
+      evidence: "/tmp/qa-evidence.json",
+      matrixSummary: "/tmp/summary.json",
       observedEvents: "/tmp/observed.json",
       report: "/tmp/report.md",
-      summary: "/tmp/summary.json",
     },
     checks: [{ name: "Matrix harness ready", status: "pass" }],
     config: {
@@ -350,9 +351,10 @@ describe("matrix live qa runtime", () => {
   it("records default and per-scenario Matrix config snapshots in the summary", () => {
     const summary = liveTesting.buildMatrixQaSummary({
       artifactPaths: {
+        evidence: "/tmp/qa-evidence.json",
+        matrixSummary: "/tmp/summary.json",
         observedEvents: "/tmp/observed.json",
         report: "/tmp/report.md",
-        summary: "/tmp/summary.json",
       },
       checks: [{ name: "Matrix harness ready", status: "pass" }],
       config: {

@@ -19,6 +19,31 @@ type QaRunnerRuntimeSurface = {
 };
 
 type QaRuntimeSurface = {
+  buildLiveTransportEvidenceSummary: (params: {
+    artifactPaths: readonly { kind: string; path: string }[];
+    checks: ReadonlyArray<{
+      artifactPaths?: Readonly<Record<string, string>>;
+      coverageIds?: readonly string[];
+      details: string;
+      id: string;
+      rttMeasurement?: {
+        finalMatchedReplyRttMs: number;
+        requestStartedAt: string;
+        responseObservedAt: string;
+        source: "request-to-observed-message";
+      };
+      rttMs?: number;
+      status: "pass" | "fail" | "blocked" | "skipped" | "skip";
+      timing?: Record<string, number>;
+      title: string;
+    }>;
+    channelDriver?: string;
+    env?: NodeJS.ProcessEnv;
+    generatedAt: string;
+    primaryModel: string;
+    providerMode: string;
+    transportId: string;
+  }) => unknown;
   defaultQaRuntimeModelForMode: (
     mode: string,
     options?: {
@@ -26,6 +51,7 @@ type QaRuntimeSurface = {
       preferredLiveModel?: string;
     },
   ) => string;
+  QA_EVIDENCE_FILENAME: string;
   startQaLiveLaneGateway: (...args: unknown[]) => Promise<unknown>;
 };
 

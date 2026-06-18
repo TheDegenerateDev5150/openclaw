@@ -40,3 +40,4 @@ export {
   setQaChannelRuntime,
 } from "./src/runtime-api.js";
 export { startQaLiveLaneGateway } from "./src/live-transports/shared/live-gateway.runtime.js";
+export { buildLiveTransportEvidenceSummary, QA_EVIDENCE_FILENAME } from "./src/evidence-summary.js";
