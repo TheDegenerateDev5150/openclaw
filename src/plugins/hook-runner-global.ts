@@ -165,6 +165,20 @@ function composeLiveHookRegistry(
       claimPolicyOwner(registration.pluginId, index);
     }
   });
+  const trustedToolPolicies = sources
+    .flatMap((registry, index) =>
+      (registry.trustedToolPolicies ?? []).filter(
+        (registration) => policyOwnerSourceIndexByPluginId.get(registration.pluginId) === index,
+      ),
+    )
+    // Preserve the trusted-policy tier contract across composed registries:
+    // bundled policies run before installed policies, and same-tier entries
+    // keep the source/plugin-load order selected above.
+    .toSorted((left, right) => {
+      const leftRank = left.origin === "bundled" ? 0 : 1;
+      const rightRank = right.origin === "bundled" ? 0 : 1;
+      return leftRank - rightRank;
+    });
   return {
     hooks: sources.flatMap((registry, index) =>
       registry.hooks.filter((hook) => ownerSourceIndexByPluginId.get(hook.pluginId) === index),
@@ -175,11 +189,7 @@ function composeLiveHookRegistry(
     plugins: sources.flatMap((registry, index) =>
       registry.plugins.filter((plugin) => ownerSourceIndexByPluginId.get(plugin.id) === index),
     ),
-    trustedToolPolicies: sources.flatMap((registry, index) =>
-      (registry.trustedToolPolicies ?? []).filter(
-        (registration) => policyOwnerSourceIndexByPluginId.get(registration.pluginId) === index,
-      ),
-    ),
+    trustedToolPolicies,
   };
 }
 
