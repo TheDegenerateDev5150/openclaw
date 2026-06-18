@@ -7,9 +7,10 @@ snapshot:
   source_ref: origin/main@41eef4a7965
 profiles:
   - id: smoke-ci
-    description: Deterministic PR and merge proof with mock model providers, synthetic qa-channel,
-      and local SDK-backed channel upstreams; no live external service required.
+    description: Deterministic PR and merge proof with mock model providers and the Crabline
+      SDK-backed channel driver.
     evidenceMode: slim
+    channelDriver: crabline
     categoryIds:
       - agent-runtime-and-provider-execution.agent-turn-execution
       - session-memory-and-context-engine.token-management
