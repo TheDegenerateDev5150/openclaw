@@ -1,0 +1,70 @@
+name: QA Smoke CI
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-smoke-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+  OPENCLAW_BUILD_PRIVATE_QA: "1"
+  OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+
+jobs:
+  smoke-ci:
+    name: Run smoke-ci QA profile
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "true"
+
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=12288
+        run: pnpm build
+
+      - name: Run smoke-ci profile
+        id: run_profile
+        shell: bash
+        env:
+          OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+        run: |
+          set -euo pipefail
+
+          output_dir=".artifacts/qa-e2e/smoke-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          pnpm openclaw qa run \
+            --repo-root . \
+            --output-dir "${output_dir}" \
+            --qa-profile smoke-ci \
+            --provider-mode mock-openai \
+            --fast
+
+      - name: Upload smoke-ci artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: qa-smoke-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.run_profile.outputs.output_dir }}
+          retention-days: 14
+          if-no-files-found: warn

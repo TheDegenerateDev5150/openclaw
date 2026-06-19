@@ -53,7 +53,7 @@ script aliases; both forms are supported.
 
 Profile-backed `qa run` reads membership from `taxonomy.yaml`, then dispatches
 the resolved scenarios through `qa suite`. `--surface` and
-`--category` filter the selected profile instead of defining separate lanes.
+`--category` filter the selected profile.
 The resulting `qa-evidence.json` includes a profile scorecard summary with
 selected-category counts and missing coverage IDs; the individual evidence
 entries remain the source of truth for the tests, coverage roles, and results.
@@ -62,8 +62,8 @@ scenario coverage fulfills matching IDs; secondary coverage stays advisory.
 Coverage IDs use dotted `namespace.behavior` form with lowercase
 alphanumeric/dash segments; profile, surface, and category IDs may still use
 the existing dashed or dotted taxonomy IDs.
-Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
-`smoke-ci` defaults to slim, and `--evidence-mode full` restores full entries:
+`smoke-ci` defaults to slim evidence;
+use `--evidence-mode full` when per-entry execution details are needed:
 
 ```bash
 pnpm openclaw qa run \
@@ -73,23 +73,19 @@ pnpm openclaw qa run \
   --output-dir .artifacts/qa-e2e/smoke-ci-profile-dispatch
 ```
 
-Use `smoke-ci` as the CI QA profile: it runs the taxonomy categories selected by
-the profile with deterministic mock model providers and the Crabline SDK-backed
-channel driver. Use `release` for the Stable/LTS proof lane. When a command also
-needs an OpenClaw root profile, put the root profile before the QA command:
+Use `smoke-ci` for PR CI. It runs the selected taxonomy categories with mock
+model providers and Crabline mock channels. Use `release` for Stable/LTS proof
+with live channel transports. When a command also needs an OpenClaw root
+profile, put the root profile before the QA command:
 
 ```bash
 pnpm openclaw --profile work qa run --qa-profile smoke-ci
 ```
 
-QA profiles select the channel driver. `smoke-ci` runs the taxonomy scenario set
-through the Crabline SDK-backed channel driver with mock model providers.
-`release` uses the native live driver: it runs the Matrix, Telegram, Discord,
-Slack, and WhatsApp live lane catalogs, reads each lane's native
-`qa-evidence.json`, and writes one merged profile `qa-evidence.json`. Scenarios
-set `execution.channel` only when they need a specific live channel; unsupported
-channels are reported as missing live coverage instead of falling back to
-`qa-channel`.
+QA profiles select the channel driver. `smoke-ci` uses Crabline mock channels.
+`release` uses native live transports and merges each lane's `qa-evidence.json`.
+Scenarios set `execution.channel` only when they need a specific channel;
+unsupported live channels count as missing coverage.
 
 ## Operator flow
 
@@ -207,14 +203,9 @@ witness video when `MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR` or
 environment. That viewer profile is only for visual capture; the pass/fail
 decision still comes from the Discord REST oracle.
 
-The scheduled/manual `.github/workflows/qa-live-transports-convex.yml` workflow
-uses the same command surface. Its `smoke-ci` job runs the full smoke profile by
-default; the Matrix, Telegram, Discord, Slack, and WhatsApp jobs are separate
-live transport lanes for upstream service coverage. Scheduled and default manual
-runs execute the fast Matrix profile with live frontier credentials, `--fast`,
-and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`. Manual `matrix_profile=all`
-fans out into the five profile shards so the exhaustive catalog can run in
-parallel while keeping one artifact directory per shard.
+`.github/workflows/qa-smoke-ci.yml` runs the `smoke-ci` profile on PRs.
+`.github/workflows/qa-live-transports-convex.yml` is scheduled/manual live
+transport coverage for Matrix, Telegram, Discord, Slack, and WhatsApp.
 
 For transport-real Telegram, Discord, Slack, and WhatsApp smoke lanes:
 
