@@ -7,6 +7,7 @@
   "dependencies": {
     "@copilotkit/aimock": "1.27.3",
     "@modelcontextprotocol/sdk": "1.29.0",
+    "crabline": "github:openclaw/crabline#93b4de9b933b2c32f16f265725a0af3c429997e2",
     "playwright-core": "1.60.0",
     "yaml": "2.9.0",
     "zod": "4.4.3"

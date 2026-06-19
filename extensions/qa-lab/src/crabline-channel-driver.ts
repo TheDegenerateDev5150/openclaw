@@ -2,6 +2,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
@@ -21,19 +22,6 @@ export const QA_CRABLINE_CHANNEL_CAPABILITY_MATRIX_PATH = "crabline-channel-capa
 export const QA_CRABLINE_CHANNEL_SMOKE_PATH = "crabline-channel-smoke.json";
 export const QA_CRABLINE_MANIFEST_PATH = "crabline-smoke.json";
 export const QA_CRABLINE_DEFAULT_CHANNEL = "telegram";
-const QA_CRABLINE_LOCAL_MOCK_CHANNELS = Object.freeze([
-  "discord",
-  "feishu",
-  "googlechat",
-  "imessage",
-  "matrix",
-  "mattermost",
-  "msteams",
-  "slack",
-  "telegram",
-  "whatsapp",
-  "zalo",
-]);
 
 export function normalizeQaChannelDriverId(input?: string | null): QaChannelDriverId | null {
   const normalized = input?.trim().toLowerCase();
@@ -92,6 +80,32 @@ type CrablineCommandError = Error & {
   code?: string;
 };
 
+type CrablineCatalogEntry = {
+  platform?: unknown;
+  status?: unknown;
+};
+
+type CrablineRuntimeModule = {
+  createRegistry: (
+    manifest: Record<string, unknown>,
+    manifestPath: string,
+  ) => {
+    catalog: readonly CrablineCatalogEntry[];
+    resolve: (
+      providerId: string,
+      fixtureId: string,
+    ) => {
+      probe: (context: {
+        config: Record<string, unknown>;
+        fixture: Record<string, unknown>;
+        manifestPath: string;
+        providerId: string;
+        userName: string;
+      }) => Promise<unknown>;
+    };
+  };
+};
+
 export type QaCrablineChannelDriverSmokeResult = {
   capabilityReport: unknown;
   manifestPath: string;
@@ -123,27 +137,51 @@ function createCrablineCatalogManifest() {
   };
 }
 
-function createLocalCrablineProvidersOutput() {
-  return {
-    configured: [],
-    support: QA_CRABLINE_LOCAL_MOCK_CHANNELS.map((platform) => ({
-      platform,
-      status: "ready",
-    })),
-  };
-}
-
 function createCrablineManifest(selection: QaCrablineChannelDriverSelection) {
+  const fixtureId = `qa-crabline-${selection.channel}`;
   return {
     configVersion: 1,
-    fixtures: [],
+    fixtures: [
+      {
+        env: [],
+        id: fixtureId,
+        inboundMatch: {
+          author: "assistant",
+          nonce: "ignore",
+          strategy: "contains",
+        },
+        mode: "agent",
+        provider: selection.channel,
+        retries: 0,
+        tags: [],
+        target: {
+          id: `${selection.channel}-default`,
+          metadata: {},
+        },
+        timeoutMs: 5_000,
+      },
+    ],
     providers: {
       [selection.channel]: {
         adapter: selection.channel,
+        capabilities: ["probe", "send", "roundtrip", "agent"],
+        env: [],
+        platform: selection.channel,
+        status: "active",
       },
     },
     userName: "openclaw-qa",
   };
+}
+
+async function loadCrablineRuntime(env: NodeJS.ProcessEnv): Promise<CrablineRuntimeModule> {
+  const explicitRuntime = env.OPENCLAW_QA_CRABLINE_RUNTIME?.trim();
+  if (explicitRuntime) {
+    return (await import(
+      pathToFileURL(path.resolve(explicitRuntime)).href
+    )) as unknown as CrablineRuntimeModule;
+  }
+  return (await import("crabline")) as unknown as CrablineRuntimeModule;
 }
 
 async function runCrablineJsonCommand(params: {
@@ -217,9 +255,6 @@ function readCrablineSupportedChannels(payload: unknown): QaCrablineChannelId[] 
 async function readSupportedCrablineChannels(
   env: NodeJS.ProcessEnv,
 ): Promise<QaCrablineChannelId[]> {
-  if (!env.OPENCLAW_QA_CRABLINE_BIN?.trim()) {
-    return readCrablineSupportedChannels(createLocalCrablineProvidersOutput());
-  }
   const tempDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "qa-crabline-catalog-"),
   );
@@ -230,12 +265,21 @@ async function readSupportedCrablineChannels(
       `${JSON.stringify(createCrablineCatalogManifest(), null, 2)}\n`,
       "utf8",
     );
-    const providers = await runCrablineJsonCommand({
-      args: ["--config", manifestPath, "providers"],
-      cwd: tempDir,
-      env,
-    });
-    const supportedChannels = readCrablineSupportedChannels(providers.json);
+    const providers = env.OPENCLAW_QA_CRABLINE_BIN?.trim()
+      ? (
+          await runCrablineJsonCommand({
+            args: ["--config", manifestPath, "providers"],
+            cwd: tempDir,
+            env,
+          })
+        ).json
+      : {
+          support: (await loadCrablineRuntime(env)).createRegistry(
+            createCrablineCatalogManifest(),
+            manifestPath,
+          ).catalog,
+        };
+    const supportedChannels = readCrablineSupportedChannels(providers);
     if (supportedChannels.length === 0) {
       throw new Error("Crabline did not report any ready channel providers.");
     }
@@ -243,33 +287,6 @@ async function readSupportedCrablineChannels(
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
-}
-
-function createLocalCrablineSmokeResult(
-  selection: QaCrablineChannelDriverSelection,
-): QaCrablineChannelDriverSmokeResult {
-  const providers = createLocalCrablineProvidersOutput();
-  return {
-    capabilityReport: {
-      command: ["openclaw", "qa-lab", "crabline-local", "providers"],
-      manifestPath: QA_CRABLINE_MANIFEST_PATH,
-      result: {
-        configured: [{ adapter: selection.channel, platform: selection.channel }],
-        support: (providers.support as Array<Record<string, unknown>>).filter(
-          (entry) => entry.platform === selection.channel,
-        ),
-      },
-    },
-    manifestPath: QA_CRABLINE_MANIFEST_PATH,
-    smoke: {
-      command: ["openclaw", "qa-lab", "crabline-local", "doctor"],
-      manifestPath: QA_CRABLINE_MANIFEST_PATH,
-      result: {
-        findings: [],
-        ok: true,
-      },
-    },
-  };
 }
 
 export async function runQaCrablineChannelDriverSmoke(
@@ -281,13 +298,42 @@ export async function runQaCrablineChannelDriverSmoke(
 ): Promise<QaCrablineChannelDriverSmokeResult> {
   const env = params.env ?? process.env;
   const manifestPath = path.join(params.outputDir, QA_CRABLINE_MANIFEST_PATH);
-  await fs.writeFile(
-    manifestPath,
-    `${JSON.stringify(createCrablineManifest(selection), null, 2)}\n`,
-    "utf8",
-  );
+  const manifest = createCrablineManifest(selection);
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   if (!env.OPENCLAW_QA_CRABLINE_BIN?.trim()) {
-    return createLocalCrablineSmokeResult(selection);
+    const runtime = await loadCrablineRuntime(env);
+    const registry = runtime.createRegistry(manifest, manifestPath);
+    const fixtureId = `qa-crabline-${selection.channel}`;
+    const provider = registry.resolve(selection.channel, fixtureId);
+    const fixture = manifest.fixtures[0]!;
+    const config = manifest.providers[selection.channel]!;
+    const probe = await provider.probe({
+      config,
+      fixture,
+      manifestPath,
+      providerId: selection.channel,
+      userName: manifest.userName,
+    });
+    return {
+      capabilityReport: {
+        command: ["node", "-e", "import('crabline')"],
+        manifestPath: path.basename(manifestPath),
+        result: {
+          configured: [{ adapter: selection.channel, platform: selection.channel }],
+          support: registry.catalog.filter((entry) => entry.platform === selection.channel),
+        },
+      },
+      manifestPath: path.basename(manifestPath),
+      smoke: {
+        command: ["node", "-e", "import('crabline').then(m=>m.createRegistry(...))"],
+        manifestPath: path.basename(manifestPath),
+        result: {
+          findings: [],
+          ok: true,
+          probe,
+        },
+      },
+    };
   }
   const providers = await runCrablineJsonCommand({
     args: ["--config", manifestPath, "providers"],
