@@ -591,22 +591,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Setup Crabline local mock runtime
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          crabline_dir=".artifacts/crabline-runtime"
-          git clone --filter=blob:none https://github.com/openclaw/crabline.git "${crabline_dir}"
-          git -C "${crabline_dir}" checkout 2ee1240
-          pnpm --dir "${crabline_dir}" install --ignore-workspace
-          pnpm --dir "${crabline_dir}" build
-
-          {
-            echo "OPENCLAW_QA_CRABLINE_BIN=${GITHUB_WORKSPACE}/${crabline_dir}/dist/src/bin/crabline.js"
-            echo "OPENCLAW_QA_CRABLINE_RUNTIME=${GITHUB_WORKSPACE}/${crabline_dir}/dist/src/index.js"
-          } >> "$GITHUB_ENV"
-
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=12288

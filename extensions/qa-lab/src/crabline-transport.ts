@@ -1,8 +1,8 @@
 // Qa Lab plugin module implements the Crabline-backed local mock QA transport.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import type { QaCrablineChannelDriverSelection } from "./crabline-channel-driver.js";
 import { QaStateBackedTransportAdapter } from "./qa-transport.js";
@@ -12,7 +12,14 @@ import type {
   QaTransportReportParams,
   QaTransportState,
 } from "./qa-transport.js";
-import type { QaBusInboundMessageInput, QaBusMessage } from "./runtime-api.js";
+import type {
+  QaBusCreateThreadInput,
+  QaBusDeleteMessageInput,
+  QaBusEditMessageInput,
+  QaBusInboundMessageInput,
+  QaBusMessage,
+  QaBusReactToMessageInput,
+} from "./runtime-api.js";
 
 const CRABLINE_TRANSPORT_ID = "crabline";
 const CRABLINE_USER_NAME = "openclaw-qa";
@@ -34,6 +41,7 @@ const CRABLINE_WEBHOOK_DEFAULTS: Record<string, { path: string; port: number }> 
 };
 
 type CrablineInboundEnvelope = {
+  author?: string;
   id: string;
   provider?: string;
   raw?: unknown;
@@ -114,6 +122,14 @@ type CrablineRuntime = {
   provider?: QaCrablineProviderAdapter;
 };
 
+type QaCrablineTransportState = QaTransportState & {
+  cleanup: () => Promise<void>;
+  createThread: (input: QaBusCreateThreadInput) => unknown;
+  deleteMessage: (input: QaBusDeleteMessageInput) => unknown;
+  editMessage: (input: QaBusEditMessageInput) => unknown;
+  reactToMessage: (input: QaBusReactToMessageInput) => unknown;
+};
+
 type CrablineStateParams = {
   fixtureContext: CrablineProviderContext;
   observeIdleMs?: number;
@@ -125,21 +141,83 @@ type CrablineStateParams = {
 
 async function loadCrablineRuntime(env: NodeJS.ProcessEnv): Promise<CrablineRuntimeModule> {
   const explicitRuntime = env.OPENCLAW_QA_CRABLINE_RUNTIME?.trim();
-  if (explicitRuntime) {
-    return (await import(
-      pathToFileURL(path.resolve(explicitRuntime)).href
-    )) as CrablineRuntimeModule;
+  if (!explicitRuntime) {
+    throw new Error("OPENCLAW_QA_CRABLINE_RUNTIME is required for external Crabline runtime use.");
   }
+  return (await import(pathToFileURL(path.resolve(explicitRuntime)).href)) as CrablineRuntimeModule;
+}
 
-  const packageName = ["crab", "line"].join("");
-  try {
-    return (await import(packageName)) as CrablineRuntimeModule;
-  } catch (error) {
-    throw new Error(
-      `Unable to load Crabline runtime package. Install crabline, add it as a dependency, or set OPENCLAW_QA_CRABLINE_RUNTIME to Crabline's dist/src/index.js. ${formatErrorMessage(error)}`,
-      { cause: error },
-    );
-  }
+function createLocalCrablineProvider(params: {
+  outputDir: string;
+  selection: QaCrablineChannelDriverSelection;
+}): QaCrablineProviderAdapter {
+  const pending = new Map<string, CrablineInboundEnvelope[]>();
+  const recorderPath = path.join(
+    params.outputDir,
+    "artifacts",
+    "crabline",
+    `${params.selection.channel}-recorder.jsonl`,
+  );
+
+  const appendRecord = async (record: Record<string, unknown>) => {
+    await fs.appendFile(recorderPath, `${JSON.stringify(record)}\n`, "utf8");
+  };
+
+  return {
+    async send(context) {
+      const sentAt = new Date().toISOString();
+      const targetId = context.fixture.target.threadId ?? context.fixture.target.id;
+      const threadId = `${params.selection.channel}:${targetId}`;
+      const messageId = `crabline-local-${randomUUID()}`;
+      const reply: CrablineInboundEnvelope = {
+        author: "assistant",
+        id: `crabline-local-reply-${randomUUID()}`,
+        provider: params.selection.channel,
+        sentAt,
+        text: `[${params.selection.channel} mock] ${context.text}`,
+        threadId,
+      };
+      const bucket = pending.get(context.nonce) ?? [];
+      bucket.push(reply);
+      pending.set(context.nonce, bucket);
+      await appendRecord({
+        direction: "send",
+        messageId,
+        nonce: context.nonce,
+        provider: params.selection.channel,
+        sentAt,
+        text: context.text,
+        threadId,
+      });
+      await appendRecord({
+        direction: "mock-reply",
+        messageId: reply.id,
+        nonce: context.nonce,
+        provider: params.selection.channel,
+        sentAt: reply.sentAt,
+        text: reply.text,
+        threadId: reply.threadId,
+      });
+      return {
+        accepted: true,
+        messageId,
+        threadId,
+      };
+    },
+    async waitForInbound(context) {
+      const bucket = pending.get(context.nonce) ?? [];
+      while (bucket.length > 0) {
+        const next = bucket.shift()!;
+        if (
+          (!context.threadId || next.threadId === context.threadId) &&
+          Date.parse(next.sentAt) >= Date.parse(context.since)
+        ) {
+          return next;
+        }
+      }
+      return null;
+    },
+  };
 }
 
 function providerConfigForChannel(channel: string, outputDir: string) {
@@ -260,9 +338,7 @@ function addObservedOutbound(params: {
   });
 }
 
-function createCrablineState(params: CrablineStateParams): QaTransportState & {
-  cleanup: () => Promise<void>;
-} {
+function createCrablineState(params: CrablineStateParams): QaCrablineTransportState {
   const baseState = params.state;
   const seenObservedIds = new Set<string>();
   const pendingObservations = new Set<Promise<void>>();
@@ -354,6 +430,10 @@ function createCrablineState(params: CrablineStateParams): QaTransportState & {
       return inbound;
     },
     addOutboundMessage: baseState.addOutboundMessage.bind(baseState),
+    createThread: baseState.createThread.bind(baseState),
+    deleteMessage: baseState.deleteMessage.bind(baseState),
+    editMessage: baseState.editMessage.bind(baseState),
+    reactToMessage: baseState.reactToMessage.bind(baseState),
     readMessage: baseState.readMessage.bind(baseState),
     searchMessages: baseState.searchMessages.bind(baseState),
     waitFor: baseState.waitFor.bind(baseState),
@@ -367,11 +447,11 @@ function createCrablineState(params: CrablineStateParams): QaTransportState & {
 
 class QaCrablineLocalMockTransport extends QaStateBackedTransportAdapter {
   readonly #selection: QaCrablineChannelDriverSelection;
-  readonly #state: QaTransportState & { cleanup: () => Promise<void> };
+  readonly #state: QaCrablineTransportState;
 
   constructor(params: {
     selection: QaCrablineChannelDriverSelection;
-    state: QaTransportState & { cleanup: () => Promise<void> };
+    state: QaCrablineTransportState;
   }) {
     super({
       id: CRABLINE_TRANSPORT_ID,
@@ -406,7 +486,39 @@ class QaCrablineLocalMockTransport extends QaStateBackedTransportAdapter {
     cfg: unknown;
     accountId?: string | null;
   }) => {
-    throw new Error("Crabline local mock transport does not expose generic message actions.");
+    const accountId = _params.accountId?.trim() || this.accountId;
+    switch (_params.action) {
+      case "thread-create":
+        return {
+          thread: this.#state.createThread({
+            ...(_params.args as unknown as QaBusCreateThreadInput),
+            accountId,
+          }),
+        };
+      case "react":
+        return {
+          message: this.#state.reactToMessage({
+            ...(_params.args as unknown as QaBusReactToMessageInput),
+            accountId,
+          }),
+        };
+      case "edit":
+        return {
+          message: this.#state.editMessage({
+            ...(_params.args as unknown as QaBusEditMessageInput),
+            accountId,
+          }),
+        };
+      case "delete":
+        return {
+          message: this.#state.deleteMessage({
+            ...(_params.args as unknown as QaBusDeleteMessageInput),
+            accountId,
+          }),
+        };
+      default:
+        throw new Error(`unsupported Crabline local mock action: ${_params.action}`);
+    }
   };
 
   createReportNotes = (_params: QaTransportReportParams) => [
@@ -440,9 +552,14 @@ export async function createQaCrablineTransportAdapter(params: {
 
   const provider =
     params.runtime?.provider ??
-    (await loadCrablineRuntime(env))
-      .createRegistry(manifest, manifestPath)
-      .resolve(params.selection.channel, fixtureId);
+    (env.OPENCLAW_QA_CRABLINE_RUNTIME?.trim()
+      ? (await loadCrablineRuntime(env))
+          .createRegistry(manifest, manifestPath)
+          .resolve(params.selection.channel, fixtureId)
+      : createLocalCrablineProvider({
+          outputDir: params.outputDir,
+          selection: params.selection,
+        }));
   const fixtureContext = createFixtureContext({
     fixtureId,
     manifest,

@@ -8,7 +8,7 @@ snapshot:
 profiles:
   - id: smoke-ci
     description: Deterministic PR and merge proof with mock model providers and the Crabline
-      SDK-backed channel driver.
+      local mock channel driver.
     evidenceMode: slim
     channelDriver: crabline
     categoryIds:

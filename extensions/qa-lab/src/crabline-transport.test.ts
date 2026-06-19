@@ -186,4 +186,73 @@ describe("crabline transport", () => {
     await transport.cleanup?.();
     expect(provider.cleanup).toHaveBeenCalled();
   });
+
+  it("executes generic message actions against the local mock bus", async () => {
+    const transport = await createQaCrablineTransportAdapter({
+      outputDir: await createTempOutputDir(),
+      selection: createSelection(),
+      state: createQaBusState(),
+    });
+    const outbound = await transport.state.addOutboundMessage({
+      text: "mock action target",
+      to: "channel:qa-room",
+    });
+
+    const threadResult = (await transport.handleAction({
+      accountId: null,
+      action: "thread-create",
+      args: {
+        conversationId: "qa-room",
+        title: "QA Thread",
+      },
+      cfg: {},
+    })) as { thread?: { id?: string } };
+    expect(threadResult.thread?.id).toMatch(/^thread-/u);
+
+    await expect(
+      transport.handleAction({
+        action: "react",
+        args: {
+          emoji: "white_check_mark",
+          messageId: outbound.id,
+        },
+        cfg: {},
+      }),
+    ).resolves.toMatchObject({
+      message: {
+        reactions: [expect.objectContaining({ emoji: "white_check_mark" })],
+      },
+    });
+
+    await expect(
+      transport.handleAction({
+        action: "edit",
+        args: {
+          messageId: outbound.id,
+          text: "mock action target edited",
+        },
+        cfg: {},
+      }),
+    ).resolves.toMatchObject({
+      message: {
+        text: "mock action target edited",
+      },
+    });
+
+    await expect(
+      transport.handleAction({
+        action: "delete",
+        args: {
+          messageId: outbound.id,
+        },
+        cfg: {},
+      }),
+    ).resolves.toMatchObject({
+      message: {
+        deleted: true,
+      },
+    });
+
+    await transport.cleanup?.();
+  });
 });

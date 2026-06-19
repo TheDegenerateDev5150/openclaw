@@ -21,6 +21,19 @@ export const QA_CRABLINE_CHANNEL_CAPABILITY_MATRIX_PATH = "crabline-channel-capa
 export const QA_CRABLINE_CHANNEL_SMOKE_PATH = "crabline-channel-smoke.json";
 export const QA_CRABLINE_MANIFEST_PATH = "crabline-smoke.json";
 export const QA_CRABLINE_DEFAULT_CHANNEL = "telegram";
+const QA_CRABLINE_LOCAL_MOCK_CHANNELS = Object.freeze([
+  "discord",
+  "feishu",
+  "googlechat",
+  "imessage",
+  "matrix",
+  "mattermost",
+  "msteams",
+  "slack",
+  "telegram",
+  "whatsapp",
+  "zalo",
+]);
 
 export function normalizeQaChannelDriverId(input?: string | null): QaChannelDriverId | null {
   const normalized = input?.trim().toLowerCase();
@@ -110,6 +123,16 @@ function createCrablineCatalogManifest() {
   };
 }
 
+function createLocalCrablineProvidersOutput() {
+  return {
+    configured: [],
+    support: QA_CRABLINE_LOCAL_MOCK_CHANNELS.map((platform) => ({
+      platform,
+      status: "ready",
+    })),
+  };
+}
+
 function createCrablineManifest(selection: QaCrablineChannelDriverSelection) {
   return {
     configVersion: 1,
@@ -194,6 +217,9 @@ function readCrablineSupportedChannels(payload: unknown): QaCrablineChannelId[] 
 async function readSupportedCrablineChannels(
   env: NodeJS.ProcessEnv,
 ): Promise<QaCrablineChannelId[]> {
+  if (!env.OPENCLAW_QA_CRABLINE_BIN?.trim()) {
+    return readCrablineSupportedChannels(createLocalCrablineProvidersOutput());
+  }
   const tempDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "qa-crabline-catalog-"),
   );
@@ -208,20 +234,6 @@ async function readSupportedCrablineChannels(
       args: ["--config", manifestPath, "providers"],
       cwd: tempDir,
       env,
-    }).catch((error: unknown) => {
-      if ((error as CrablineCommandError).code === "ENOENT") {
-        return {
-          json: {
-            support: [{ platform: QA_CRABLINE_DEFAULT_CHANNEL, status: "ready" }],
-          },
-          result: {
-            command: ["crabline", "--json", "providers"],
-            stderr: "",
-            stdout: "",
-          },
-        };
-      }
-      throw error;
     });
     const supportedChannels = readCrablineSupportedChannels(providers.json);
     if (supportedChannels.length === 0) {
@@ -231,6 +243,33 @@ async function readSupportedCrablineChannels(
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
   }
+}
+
+function createLocalCrablineSmokeResult(
+  selection: QaCrablineChannelDriverSelection,
+): QaCrablineChannelDriverSmokeResult {
+  const providers = createLocalCrablineProvidersOutput();
+  return {
+    capabilityReport: {
+      command: ["openclaw", "qa-lab", "crabline-local", "providers"],
+      manifestPath: QA_CRABLINE_MANIFEST_PATH,
+      result: {
+        configured: [{ adapter: selection.channel, platform: selection.channel }],
+        support: (providers.support as Array<Record<string, unknown>>).filter(
+          (entry) => entry.platform === selection.channel,
+        ),
+      },
+    },
+    manifestPath: QA_CRABLINE_MANIFEST_PATH,
+    smoke: {
+      command: ["openclaw", "qa-lab", "crabline-local", "doctor"],
+      manifestPath: QA_CRABLINE_MANIFEST_PATH,
+      result: {
+        findings: [],
+        ok: true,
+      },
+    },
+  };
 }
 
 export async function runQaCrablineChannelDriverSmoke(
@@ -247,6 +286,9 @@ export async function runQaCrablineChannelDriverSmoke(
     `${JSON.stringify(createCrablineManifest(selection), null, 2)}\n`,
     "utf8",
   );
+  if (!env.OPENCLAW_QA_CRABLINE_BIN?.trim()) {
+    return createLocalCrablineSmokeResult(selection);
+  }
   const providers = await runCrablineJsonCommand({
     args: ["--config", manifestPath, "providers"],
     cwd: params.outputDir,

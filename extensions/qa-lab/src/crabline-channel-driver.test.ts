@@ -49,6 +49,21 @@ describe("crabline channel driver metadata", () => {
     await expect(resolveQaCrablineChannelDriverSelection({})).resolves.toBeNull();
   });
 
+  it("resolves the local mock driver without a Crabline CLI install", async () => {
+    await expect(
+      resolveQaCrablineChannelDriverSelection({
+        channel: "telegram",
+        channelDriver: "crabline",
+        env: {},
+      }),
+    ).resolves.toEqual({
+      capabilityMatrixPath: "crabline-channel-capability-matrix.json",
+      channel: "telegram",
+      channelDriver: "crabline",
+      smokeArtifactPath: "crabline-channel-smoke.json",
+    });
+  });
+
   it("resolves the Telegram local mock channel driver", async () => {
     const crablineBin = await createFakeCrablineCli();
     const selection = await resolveQaCrablineChannelDriverSelection({
@@ -149,6 +164,37 @@ describe("crabline channel driver metadata", () => {
     } finally {
       // tempDirs cleanup covers outputDir and the fake CLI dir.
     }
+  });
+
+  it("runs built-in local mock smoke without Crabline CLI env", async () => {
+    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-crabline-driver-"));
+    tempDirs.push(outputDir);
+    await expect(
+      runQaCrablineChannelDriverSmoke(
+        {
+          capabilityMatrixPath: "crabline-channel-capability-matrix.json",
+          channel: "telegram",
+          channelDriver: "crabline",
+          smokeArtifactPath: "crabline-channel-smoke.json",
+        },
+        {
+          env: {},
+          outputDir,
+        },
+      ),
+    ).resolves.toMatchObject({
+      capabilityReport: {
+        result: {
+          configured: [{ adapter: "telegram", platform: "telegram" }],
+        },
+      },
+      smoke: {
+        result: {
+          findings: [],
+          ok: true,
+        },
+      },
+    });
   });
 
   it("defaults to Telegram and rejects channels not reported ready by Crabline", async () => {
