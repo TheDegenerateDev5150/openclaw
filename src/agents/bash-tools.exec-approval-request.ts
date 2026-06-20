@@ -64,6 +64,7 @@ type RequestExecApprovalDecisionParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  approvalReviewerDeviceIds?: string[];
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
 };
@@ -99,6 +100,7 @@ function buildExecApprovalRequestToolParams(
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
+    approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     requireDeliveryRoute: params.requireDeliveryRoute,
     suppressDelivery: params.suppressDelivery,
     timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -210,6 +212,7 @@ type HostExecApprovalParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  approvalReviewerDeviceIds?: string[];
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
 };
@@ -318,6 +321,7 @@ async function buildHostApprovalDecisionParams(
     resolvedPath: params.resolvedPath,
     requireDeliveryRoute: params.requireDeliveryRoute,
     suppressDelivery: params.suppressDelivery,
+    approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     ...buildExecApprovalTurnSourceContext(params),
   };
 }
